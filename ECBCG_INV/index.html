@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Club POS & Inventory</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome (CDN) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <h1 id="header-title">Dashboard</h1>
+            <div class="header-actions">
+                <button id="theme-toggle" class="icon-btn"><i class="fas fa-moon"></i></button>
+            </div>
+        </header>
+
+        <!-- Main Content Area -->
+        <main class="app-main">
+            
+            <!-- SECTION: DASHBOARD -->
+            <section id="view-dashboard" class="view-section active">
+                <div class="summary-cards">
+                    <div class="card stat-card primary-gradient">
+                        <div class="stat-icon"><i class="fas fa-box-open"></i></div>
+                        <div class="stat-details">
+                            <h3>Total Stock Items</h3>
+                            <p id="stat-total-items">0</p>
+                        </div>
+                    </div>
+                    <div class="card stat-card secondary-gradient">
+                        <div class="stat-icon"><i class="fas fa-chart-line"></i></div>
+                        <div class="stat-details">
+                            <h3>Today's Sales</h3>
+                            <p id="stat-today-sales">$0.00</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card recent-activity">
+                    <h2>Quick Actions</h2>
+                    <div class="quick-action-grid">
+                        <button class="action-btn" onclick="app.navigate('pos')">
+                            <i class="fas fa-cash-register"></i> New Sale
+                        </button>
+                        <button class="action-btn" onclick="app.showItemModal()">
+                            <i class="fas fa-plus"></i> Add Item
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION: INVENTORY -->
+            <section id="view-inventory" class="view-section">
+                <div class="section-header">
+                    <div class="search-bar">
+                        <i class="fas fa-search"></i>
+                        <input type="text" id="inventory-search" placeholder="Search inventory...">
+                    </div>
+                    <button class="primary-btn add-btn" onclick="app.showItemModal()"><i class="fas fa-plus"></i> Add</button>
+                </div>
+                
+                <div class="inventory-list" id="inventory-list">
+                    <!-- Items will be injected here via JS -->
+                </div>
+            </section>
+
+            <!-- SECTION: POS (Point of Sale) -->
+            <section id="view-pos" class="view-section">
+                <div class="pos-layout">
+                    <!-- Product Grid -->
+                    <div class="pos-products">
+                        <div class="search-bar">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="pos-search" placeholder="Search to add...">
+                        </div>
+                        <div class="product-grid" id="pos-product-grid">
+                            <!-- Products injected via JS -->
+                        </div>
+                    </div>
+                    
+                    <!-- Cart / Checkout -->
+                    <div class="pos-cart">
+                        <div class="cart-header">
+                            <h2>Current Order</h2>
+                            <button class="clear-btn" onclick="app.clearCart()"><i class="fas fa-trash"></i></button>
+                        </div>
+                        <div class="cart-items" id="cart-items">
+                            <!-- Cart items injected via JS -->
+                            <div class="empty-cart-msg">Cart is empty</div>
+                        </div>
+                        <div class="cart-footer">
+                            <div class="cart-total">
+                                <span>Total:</span>
+                                <span id="cart-total-amount">$0.00</span>
+                            </div>
+                            <button class="checkout-btn" id="checkout-btn" onclick="app.checkout()" disabled>Checkout</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- SECTION: REPORTS -->
+            <section id="view-reports" class="view-section">
+                <div class="card report-actions">
+                    <h2>Export Data (CSV)</h2>
+                    <p class="export-desc">Download your data to open in Google Sheets or Excel.</p>
+                    <div class="export-buttons">
+                        <button class="outline-btn" onclick="app.exportInventoryCSV()"><i class="fas fa-file-csv"></i> Export Inventory</button>
+                        <button class="outline-btn" onclick="app.exportSalesCSV()"><i class="fas fa-file-csv"></i> Export Sales</button>
+                    </div>
+                </div>
+
+                <div class="card recent-sales-list">
+                    <h2>Recent Sales</h2>
+                    <div id="sales-history">
+                        <!-- Sales history injected via JS -->
+                    </div>
+                </div>
+            </section>
+
+        </main>
+
+        <!-- Bottom Navigation (Mobile Friendly) -->
+        <nav class="bottom-nav">
+            <button class="nav-item active" data-target="dashboard">
+                <i class="fas fa-home"></i>
+                <span>Home</span>
+            </button>
+            <button class="nav-item" data-target="inventory">
+                <i class="fas fa-boxes"></i>
+                <span>Inventory</span>
+            </button>
+            <button class="nav-item pos-nav-btn" data-target="pos">
+                <div class="pos-icon-wrapper">
+                    <i class="fas fa-cash-register"></i>
+                </div>
+                <span>POS</span>
+            </button>
+            <button class="nav-item" data-target="reports">
+                <i class="fas fa-chart-pie"></i>
+                <span>Reports</span>
+            </button>
+        </nav>
+
+        <!-- Modals -->
+        
+        <!-- Add/Edit Item Modal -->
+        <div id="item-modal" class="modal-overlay">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="modal-title">Add New Item</h2>
+                    <button class="close-btn" onclick="app.closeItemModal()"><i class="fas fa-times"></i></button>
+                </div>
+                <form id="item-form">
+                    <input type="hidden" id="item-id">
+                    <div class="form-group">
+                        <label for="item-name">Item Name</label>
+                        <input type="text" id="item-name" required placeholder="e.g. Club T-Shirt">
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="item-price">Price ($)</label>
+                            <input type="number" id="item-price" required min="0" step="0.01" placeholder="0.00">
+                        </div>
+                        <div class="form-group">
+                            <label for="item-stock">Initial Stock</label>
+                            <input type="number" id="item-stock" required min="0" step="1" placeholder="0">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="item-category">Category</label>
+                        <input type="text" id="item-category" placeholder="e.g. Merch, Snacks">
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="cancel-btn" onclick="app.closeItemModal()">Cancel</button>
+                        <button type="submit" class="save-btn">Save Item</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Toast Notification -->
+        <div id="toast" class="toast">Message</div>
+
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
