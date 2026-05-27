@@ -3,7 +3,7 @@
  * Core Application Logic
  */
 
-const App = (function() {
+const app = (function() {
     // --- State Management ---
     let state = {
         inventory: [],
@@ -455,4 +455,4 @@ const App = (function() {
 })();
 
 // Boot app when DOM is ready
-document.addEventListener('DOMContentLoaded', App.init);
+document.addEventListener('DOMContentLoaded', app.init);
