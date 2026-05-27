@@ -339,6 +339,16 @@ const app = (function() {
         showToast("Sale completed successfully!");
     }
 
+    function deleteSale(id) {
+        if (confirm("Are you sure you want to delete this sale record?")) {
+            state.sales = state.sales.filter(s => s.id !== id);
+            saveState();
+            renderReports();
+            renderDashboard(); // Update dashboard in case today's sales changed
+            showToast("Sale deleted.");
+        }
+    }
+
     // --- Reports & Export ---
     function renderReports() {
         const historyContainer = document.getElementById('sales-history');
@@ -359,11 +369,14 @@ const app = (function() {
             const itemsStr = sale.items.map(i => `${i.qty}x ${i.name}`).join(', ');
 
             div.innerHTML = `
-                <div>
+                <div style="flex: 1;">
                     <div class="sales-time">${dateStr}</div>
                     <div style="font-size: 0.9rem; margin-top:0.25rem;">${itemsStr}</div>
                 </div>
-                <div class="sales-amount">${formatCurrency(sale.total)}</div>
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                    <div class="sales-amount">${formatCurrency(sale.total)}</div>
+                    <button class="action-icon danger-btn" onclick="app.deleteSale('${sale.id}')" title="Delete Sale"><i class="fas fa-trash"></i></button>
+                </div>
             `;
             historyContainer.appendChild(div);
         });
@@ -444,7 +457,8 @@ const app = (function() {
         clearCart,
         checkout,
         exportInventoryCSV,
-        exportSalesCSV
+        exportSalesCSV,
+        deleteSale
     };
 })();
 
