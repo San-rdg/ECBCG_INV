@@ -25,8 +25,8 @@ const app = (function() {
             document.documentElement.setAttribute('data-theme', state.theme);
         }
 
-        // Generate some dummy data if empty for demo purposes
-        if (state.inventory.length === 0) {
+        // Generate some dummy data if empty for demo purposes (only on first ever load)
+        if (!storedInventory) {
             state.inventory = [
                 { id: generateId(), name: "Club T-Shirt", price: 15.00, stock: 50, category: "Merch" },
                 { id: generateId(), name: "Sticker Pack", price: 3.50, stock: 100, category: "Merch" },
