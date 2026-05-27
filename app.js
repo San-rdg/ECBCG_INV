@@ -18,27 +18,21 @@ const app = (function() {
         const storedSales = localStorage.getItem('club_sales');
         const storedTheme = localStorage.getItem('club_theme');
 
+        const storedCart = localStorage.getItem('club_cart');
+
         if (storedInventory) state.inventory = JSON.parse(storedInventory);
         if (storedSales) state.sales = JSON.parse(storedSales);
+        if (storedCart) state.cart = JSON.parse(storedCart);
         if (storedTheme) {
             state.theme = storedTheme;
             document.documentElement.setAttribute('data-theme', state.theme);
-        }
-
-        // Generate some dummy data if empty for demo purposes (only on first ever load)
-        if (!storedInventory) {
-            state.inventory = [
-                { id: generateId(), name: "Club T-Shirt", price: 15.00, stock: 50, category: "Merch" },
-                { id: generateId(), name: "Sticker Pack", price: 3.50, stock: 100, category: "Merch" },
-                { id: generateId(), name: "Energy Drink", price: 2.50, stock: 24, category: "Snacks" }
-            ];
-            saveState();
         }
     }
 
     function saveState() {
         localStorage.setItem('club_inventory', JSON.stringify(state.inventory));
         localStorage.setItem('club_sales', JSON.stringify(state.sales));
+        localStorage.setItem('club_cart', JSON.stringify(state.cart));
         localStorage.setItem('club_theme', state.theme);
     }
 
