@@ -9,16 +9,28 @@ const app = (function() {
         inventory: [],
         sales: [],
         cart: [],
-        theme: 'light'
+        contributors: [],
+        activeContributorId: '',
+        activeLeaderboardTab: 'board',
+        theme: 'light',
+        adminPin: '1234',
+        isAdminUnlocked: false
     };
+
+    let enteredPin = '';
+    let pendingNavTarget = null;
+    let pendingAction = null;
 
     // Initialize state from LocalStorage
     function loadState() {
         const storedInventory = localStorage.getItem('club_inventory');
         const storedSales = localStorage.getItem('club_sales');
         const storedTheme = localStorage.getItem('club_theme');
-
         const storedCart = localStorage.getItem('club_cart');
+        
+        const storedContributors = localStorage.getItem('club_contributors');
+        const storedActiveContributorId = localStorage.getItem('club_active_contributor_id');
+        const storedPin = localStorage.getItem('club_admin_pin');
 
         if (storedInventory) state.inventory = JSON.parse(storedInventory);
         if (storedSales) state.sales = JSON.parse(storedSales);
@@ -27,6 +39,86 @@ const app = (function() {
             state.theme = storedTheme;
             document.documentElement.setAttribute('data-theme', state.theme);
         }
+        if (storedPin) {
+            state.adminPin = storedPin;
+        } else {
+            state.adminPin = '1234';
+        }
+        state.isAdminUnlocked = false; // Always start locked
+        
+        if (storedContributors) {
+            state.contributors = JSON.parse(storedContributors);
+        } else {
+            // Seed base volunteer list to showcase the beautiful podium and leaderboard at start
+            state.contributors = [
+                {
+                    id: 'c1',
+                    name: 'Alex Rivera',
+                    avatar: 'indigo',
+                    xp: 1250,
+                    level: 5,
+                    socials: {
+                        twitter: 'https://twitter.com/alexrivera',
+                        github: 'https://github.com/alexrivera',
+                        linkedin: 'https://linkedin.com/in/alexrivera',
+                        instagram: 'https://instagram.com/alexrivera'
+                    },
+                    badges: ['sales_rookie', 'sales_guru', 'stock_master', 'socialite', 'legendary'],
+                    stats: { totalSalesVolume: 245.50, totalSalesCount: 12, totalStockAdjustments: 14, manualContributionsCount: 3 }
+                },
+                {
+                    id: 'c2',
+                    name: 'Taylor Chen',
+                    avatar: 'pink',
+                    xp: 720,
+                    level: 4,
+                    socials: {
+                        twitter: 'https://twitter.com/taylorchen',
+                        github: 'https://github.com/taylorchen',
+                        linkedin: 'https://linkedin.com/in/taylorchen',
+                        instagram: ''
+                    },
+                    badges: ['sales_rookie', 'stock_master'],
+                    stats: { totalSalesVolume: 85.00, totalSalesCount: 5, totalStockAdjustments: 11, manualContributionsCount: 1 }
+                },
+                {
+                    id: 'c3',
+                    name: 'Jordan Smith',
+                    avatar: 'emerald',
+                    xp: 410,
+                    level: 3,
+                    socials: {
+                        twitter: '',
+                        github: 'https://github.com/jordansmith',
+                        linkedin: 'https://linkedin.com/in/jordansmith',
+                        instagram: 'https://instagram.com/jordansmith'
+                    },
+                    badges: ['sales_rookie', 'socialite'],
+                    stats: { totalSalesVolume: 42.00, totalSalesCount: 3, totalStockAdjustments: 3, manualContributionsCount: 2 }
+                },
+                {
+                    id: 'c4',
+                    name: 'Sam Wilson',
+                    avatar: 'amber',
+                    xp: 80,
+                    level: 1,
+                    socials: {
+                        twitter: 'https://twitter.com/samwilson',
+                        github: '',
+                        linkedin: '',
+                        instagram: ''
+                    },
+                    badges: ['sales_rookie'],
+                    stats: { totalSalesVolume: 12.00, totalSalesCount: 1, totalStockAdjustments: 0, manualContributionsCount: 0 }
+                }
+            ];
+        }
+
+        if (storedActiveContributorId) {
+            state.activeContributorId = storedActiveContributorId;
+        } else if (state.contributors.length > 0) {
+            state.activeContributorId = state.contributors[0].id;
+        }
     }
 
     function saveState() {
@@ -34,6 +126,9 @@ const app = (function() {
         localStorage.setItem('club_sales', JSON.stringify(state.sales));
         localStorage.setItem('club_cart', JSON.stringify(state.cart));
         localStorage.setItem('club_theme', state.theme);
+        localStorage.setItem('club_contributors', JSON.stringify(state.contributors));
+        localStorage.setItem('club_active_contributor_id', state.activeContributorId);
+        localStorage.setItem('club_admin_pin', state.adminPin);
     }
 
     // --- Utilities ---
@@ -54,6 +149,12 @@ const app = (function() {
 
     // --- Navigation & UI ---
     function navigate(targetView) {
+        // Navigation Guards for Protected Sections
+        if ((targetView === 'inventory' || targetView === 'reports') && !state.isAdminUnlocked) {
+            showPinPrompt(targetView);
+            return;
+        }
+
         // Update nav buttons
         document.querySelectorAll('.nav-item').forEach(btn => {
             if (btn.dataset.target === targetView) {
@@ -74,7 +175,8 @@ const app = (function() {
             'dashboard': 'Dashboard',
             'inventory': 'Inventory Management',
             'pos': 'Point of Sale',
-            'reports': 'Reports & Export'
+            'reports': 'Reports & Export',
+            'leaderboard': 'Volunteer Leaderboard'
         };
         document.getElementById('header-title').textContent = titles[targetView];
 
@@ -83,6 +185,7 @@ const app = (function() {
         if (targetView === 'inventory') renderInventory();
         if (targetView === 'pos') renderPOS();
         if (targetView === 'reports') renderReports();
+        if (targetView === 'leaderboard') renderLeaderboardView();
     }
 
     function toggleTheme() {
@@ -145,16 +248,29 @@ const app = (function() {
     }
 
     function adjustStock(id, amount) {
+        if (!state.isAdminUnlocked) {
+            showPinPrompt(null, () => adjustStock(id, amount));
+            return;
+        }
         const item = state.inventory.find(i => i.id === id);
         if (item) {
             item.stock = Math.max(0, item.stock + amount);
             saveState();
             renderInventory(document.getElementById('inventory-search').value);
             showToast(`${item.name} stock updated.`);
+
+            // Award XP for Stock updates to the active volunteer
+            if (state.activeContributorId) {
+                awardXP(state.activeContributorId, 2 * Math.abs(amount), 'stock', Math.abs(amount));
+            }
         }
     }
 
     function deleteItem(id) {
+        if (!state.isAdminUnlocked) {
+            showPinPrompt(null, () => deleteItem(id));
+            return;
+        }
         if (confirm("Are you sure you want to delete this item?")) {
             state.inventory = state.inventory.filter(i => i.id !== id);
             saveState();
@@ -165,6 +281,10 @@ const app = (function() {
 
     // --- Add/Edit Modal ---
     function showItemModal() {
+        if (!state.isAdminUnlocked) {
+            showPinPrompt(null, showItemModal);
+            return;
+        }
         document.getElementById('item-modal').classList.add('active');
     }
     function closeItemModal() {
@@ -175,6 +295,10 @@ const app = (function() {
     }
 
     function editItem(id) {
+        if (!state.isAdminUnlocked) {
+            showPinPrompt(null, () => editItem(id));
+            return;
+        }
         const item = state.inventory.find(i => i.id === id);
         if (item) {
             document.getElementById('item-id').value = item.id;
@@ -205,6 +329,11 @@ const app = (function() {
         } else {
             state.inventory.push(newItem);
             showToast("Item added successfully.");
+            
+            // Award XP for creating new Inventory items to active volunteer
+            if (state.activeContributorId) {
+                awardXP(state.activeContributorId, 15, 'inventory_add');
+            }
         }
 
         saveState();
@@ -328,9 +457,16 @@ const app = (function() {
             id: generateId(),
             date: new Date().toISOString(),
             items: state.cart.map(i => ({ name: i.name, qty: i.qty, price: i.price })),
-            total: total
+            total: total,
+            contributorId: state.activeContributorId || null // link sale to contributor
         };
         state.sales.unshift(sale); // Add to beginning
+
+        // Award XP to selected active contributor
+        if (state.activeContributorId) {
+            const xpEarned = Math.round(10 + total); // 10 XP flat base + 1 XP per $1 sold
+            awardXP(state.activeContributorId, xpEarned, 'sale_value', total);
+        }
 
         saveState();
         state.cart = [];
@@ -340,6 +476,10 @@ const app = (function() {
     }
 
     function deleteSale(id) {
+        if (!state.isAdminUnlocked) {
+            showPinPrompt(null, () => deleteSale(id));
+            return;
+        }
         if (confirm("Are you sure you want to delete this sale record?")) {
             state.sales = state.sales.filter(s => s.id !== id);
             saveState();
@@ -397,6 +537,10 @@ const app = (function() {
     }
 
     function exportInventoryCSV() {
+        if (!state.isAdminUnlocked) {
+            showPinPrompt(null, exportInventoryCSV);
+            return;
+        }
         let csv = "ID,Name,Category,Price,Current Stock\n";
         state.inventory.forEach(item => {
             csv += `"${item.id}","${item.name}","${item.category || ''}",${item.price},${item.stock}\n`;
@@ -406,6 +550,10 @@ const app = (function() {
     }
 
     function exportSalesCSV() {
+        if (!state.isAdminUnlocked) {
+            showPinPrompt(null, exportSalesCSV);
+            return;
+        }
         let csv = "Sale ID,Date,Items Summary,Total Amount\n";
         state.sales.forEach(sale => {
             const itemsStr = sale.items.map(i => `${i.qty}x ${i.name}`).join('; ');
@@ -413,6 +561,765 @@ const app = (function() {
         });
         downloadCSV(csv, `sales_export_${new Date().toISOString().split('T')[0]}.csv`);
         showToast("Sales CSV downloaded.");
+    }
+
+    // ==========================================================================
+    // GAMIFICATION & LEADERBOARD SYSTEM ENGINE
+    // ==========================================================================
+
+    // Dynamic initials-avatar generator helper
+    function getInitials(name) {
+        if (!name) return "??";
+        const parts = name.trim().split(/\s+/);
+        if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
+        return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    }
+
+    // Level-up math calculations
+    // Level curves: Level 1 starts at 0 XP. 
+    // Boundaries: L1: 0, L2: 100, L3: 300, L4: 600, L5: 1000, L6: 1500, L7: 2100, etc.
+    function calculateLevelInfo(xp) {
+        const bounds = [0, 100, 300, 600, 1000, 1500, 2100, 2800, 3600, 4500, 5500];
+        let lvl = 1;
+        while (lvl < bounds.length && xp >= bounds[lvl]) {
+            lvl++;
+        }
+        const baseXP = bounds[lvl - 1];
+        const nextXP = bounds[lvl] || (baseXP + 1000);
+        const gained = xp - baseXP;
+        const needed = nextXP - baseXP;
+        const percent = Math.min(100, Math.floor((gained / needed) * 100));
+        return {
+            level: lvl,
+            percent: percent,
+            currentXP: gained,
+            neededXP: needed,
+            totalCurrentXP: xp,
+            totalNeededXP: nextXP
+        };
+    }
+
+    // Award XP to a volunteer
+    function awardXP(id, xpAmount, actionType, details = 0) {
+        if (!id) return;
+        const cont = state.contributors.find(c => c.id === id);
+        if (!cont) return;
+
+        const oldXP = cont.xp;
+        cont.xp += xpAmount;
+
+        const oldLvlInfo = calculateLevelInfo(oldXP);
+        const newLvlInfo = calculateLevelInfo(cont.xp);
+        cont.level = newLvlInfo.level;
+
+        // Increment stats
+        if (actionType === 'sale_value') {
+            cont.stats.totalSalesVolume += parseFloat(details) || 0;
+            cont.stats.totalSalesCount += 1;
+        } else if (actionType === 'stock') {
+            cont.stats.totalStockAdjustments += parseInt(details) || 0;
+        } else if (actionType === 'manual') {
+            cont.stats.manualContributionsCount += 1;
+        }
+
+        // Re-evaluate achievements
+        checkAndAwardBadges(cont);
+        saveState();
+
+        if (cont.level > oldLvlInfo.level) {
+            showToast(`🎉 CONGRATS! ${cont.name} leveled up to Level ${cont.level}! 🎉`);
+        } else {
+            showToast(`+${xpAmount} XP earned by ${cont.name}!`);
+        }
+
+        // Re-render
+        if (state.activeLeaderboardTab === 'board') renderLeaderboard();
+        if (state.activeLeaderboardTab === 'manage') renderManageContributors();
+        updateContributorHeaderSelector();
+    }
+
+    // Achievement badges checker
+    function checkAndAwardBadges(cont) {
+        const badges = [];
+
+        // Rookie Badge
+        if (cont.stats.totalSalesCount > 0 || cont.stats.manualContributionsCount > 0 || cont.stats.totalStockAdjustments > 0) {
+            badges.push('sales_rookie');
+        }
+        // Sales Guru ($200+ Sales Volume)
+        if (cont.stats.totalSalesVolume >= 200) {
+            badges.push('sales_guru');
+        }
+        // Stock Master (10+ stock adjustments)
+        if (cont.stats.totalStockAdjustments >= 10) {
+            badges.push('stock_master');
+        }
+        // Socialite (2+ social channels linked)
+        let socialCount = 0;
+        if (cont.socials) {
+            if (cont.socials.twitter) socialCount++;
+            if (cont.socials.github) socialCount++;
+            if (cont.socials.linkedin) socialCount++;
+            if (cont.socials.instagram) socialCount++;
+        }
+        if (socialCount >= 2) {
+            badges.push('socialite');
+        }
+        // Legendary (Level 5+)
+        if (cont.level >= 5) {
+            badges.push('legendary');
+        }
+
+        cont.badges = badges;
+    }
+
+    // Active contributor selection setter
+    function setActiveContributor(id) {
+        state.activeContributorId = id;
+        saveState();
+        if (id) {
+            const cont = state.contributors.find(c => c.id === id);
+            showToast(`System active user set to: ${cont.name}`);
+        } else {
+            showToast("System active user: Guest Mode");
+        }
+        updateContributorHeaderSelector();
+    }
+
+    // Update selectors in header and manual logger dropdowns
+    function updateContributorHeaderSelector() {
+        const select = document.getElementById('active-contributor-select');
+        select.innerHTML = '<option value="">Guest User</option>';
+        
+        const manualSelect = document.getElementById('log-contributor-select');
+        if (manualSelect) manualSelect.innerHTML = '<option value="" disabled selected>-- Select Volunteer --</option>';
+
+        state.contributors.forEach(c => {
+            const info = calculateLevelInfo(c.xp);
+            
+            // Header selector
+            const opt = document.createElement('option');
+            opt.value = c.id;
+            opt.textContent = `${c.name} (Lvl ${info.level})`;
+            if (c.id === state.activeContributorId) {
+                opt.selected = true;
+            }
+            select.appendChild(opt);
+
+            // Log dropdown selector
+            if (manualSelect) {
+                const optLog = document.createElement('option');
+                optLog.value = c.id;
+                optLog.textContent = c.name;
+                manualSelect.appendChild(optLog);
+            }
+        });
+    }
+
+    // Tab Switcher inside Leaderboard section
+    function switchLeaderboardTab(tab) {
+        if (tab === 'manage' && !state.isAdminUnlocked) {
+            showPinPrompt(null, () => switchLeaderboardTab('manage'));
+            return;
+        }
+
+        state.activeLeaderboardTab = tab;
+        
+        document.getElementById('tab-leaderboard-board').classList.remove('active');
+        document.getElementById('tab-leaderboard-manage').classList.remove('active');
+        
+        document.getElementById('leaderboard-standings-tab').classList.remove('active');
+        document.getElementById('leaderboard-manage-tab').classList.remove('active');
+        
+        document.getElementById(`tab-leaderboard-${tab}`).classList.add('active');
+        document.getElementById(`leaderboard-${tab}-tab`).classList.add('active');
+        
+        renderLeaderboardView();
+    }
+
+    // Main Leaderboard Section routing
+    function renderLeaderboardView() {
+        updateContributorHeaderSelector();
+        if (state.activeLeaderboardTab === 'board') {
+            renderLeaderboard();
+        } else if (state.activeLeaderboardTab === 'manage') {
+            renderManageContributors();
+        }
+    }
+
+    // Renders Podium + ranked list
+    function renderLeaderboard() {
+        // Sort contributors by XP descending
+        const sorted = [...state.contributors].sort((a, b) => b.xp - a.xp);
+
+        // Renders Podium (Top 3)
+        const podium = document.getElementById('leaderboard-podium');
+        podium.innerHTML = '';
+
+        const podiumPositions = [
+            { pos: 2, key: 'second', cssClass: 'second' },
+            { pos: 1, key: 'first', cssClass: 'first' },
+            { pos: 3, key: 'third', cssClass: 'third' }
+        ];
+
+        podiumPositions.forEach(p => {
+            const index = p.pos - 1;
+            const c = sorted[index];
+
+            const col = document.createElement('div');
+            col.className = `podium-column ${p.cssClass}`;
+
+            if (c) {
+                const initials = getInitials(c.name);
+                const info = calculateLevelInfo(c.xp);
+                const crown = p.pos === 1 ? '<i class="fas fa-crown podium-crown"></i>' : '';
+
+                col.innerHTML = `
+                    <div class="podium-avatar-wrapper" onclick="app.showProfileDetail('${c.id}')">
+                        ${crown}
+                        <div class="avatar-circle avatar-${c.avatar}">${initials}</div>
+                        <div class="podium-rank-badge">${p.pos}</div>
+                    </div>
+                    <div class="podium-name">${c.name}</div>
+                    <div class="podium-xp">Lvl ${info.level} • ${c.xp} XP</div>
+                    <div class="podium-block"></div>
+                `;
+            } else {
+                col.innerHTML = `
+                    <div class="podium-avatar-wrapper">
+                        <div class="avatar-circle" style="background-color: #94a3b8; border: 3px dashed #cbd5e1; color:#cbd5e1;">-</div>
+                        <div class="podium-rank-badge">${p.pos}</div>
+                    </div>
+                    <div class="podium-name">Empty</div>
+                    <div class="podium-xp">0 XP</div>
+                    <div class="podium-block"></div>
+                `;
+            }
+            podium.appendChild(col);
+        });
+
+        // Renders Ranked list (starts from Rank 4)
+        const list = document.getElementById('leaderboard-list');
+        list.innerHTML = '';
+
+        if (sorted.length <= 3) {
+            list.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 1.5rem 0;">All active volunteers are highlighted on the podium!</p>';
+            return;
+        }
+
+        const standardRanks = sorted.slice(3);
+        standardRanks.forEach((c, i) => {
+            const rank = i + 4;
+            const initials = getInitials(c.name);
+            const info = calculateLevelInfo(c.xp);
+
+            // Construct social plugins icons
+            let socialsHtml = '';
+            if (c.socials) {
+                if (c.socials.twitter) socialsHtml += `<a href="${c.socials.twitter}" target="_blank" class="social-btn twitter" onclick="e.stopPropagation()"><i class="fab fa-twitter"></i></a>`;
+                if (c.socials.github) socialsHtml += `<a href="${c.socials.github}" target="_blank" class="social-btn github" onclick="e.stopPropagation()"><i class="fab fa-github"></i></a>`;
+                if (c.socials.linkedin) socialsHtml += `<a href="${c.socials.linkedin}" target="_blank" class="social-btn linkedin" onclick="e.stopPropagation()"><i class="fab fa-linkedin"></i></a>`;
+                if (c.socials.instagram) socialsHtml += `<a href="${c.socials.instagram}" target="_blank" class="social-btn instagram" onclick="e.stopPropagation()"><i class="fab fa-instagram"></i></a>`;
+            }
+
+            const item = document.createElement('div');
+            item.className = 'leaderboard-item';
+            item.onclick = () => showProfileDetail(c.id);
+            item.innerHTML = `
+                <div class="leaderboard-rank">#${rank}</div>
+                <div class="avatar-circle avatar-${c.avatar}">${initials}</div>
+                <div class="leaderboard-info">
+                    <div class="leaderboard-name-row">
+                        <span class="leaderboard-name">${c.name}</span>
+                        <span class="level-badge">Lvl ${info.level}</span>
+                    </div>
+                    <div class="social-plugins">
+                        ${socialsHtml || '<span style="font-size: 0.7rem; color: var(--text-secondary); font-style:italic;">No socials linked</span>'}
+                    </div>
+                </div>
+                <div class="leaderboard-xp-display">
+                    <span class="leaderboard-xp-number">${c.xp} XP</span>
+                    <span class="leaderboard-xp-label">${info.percent}% progress</span>
+                    <div class="xp-bar-container" style="width: 80px; margin-top: 0.2rem; height: 4px;">
+                        <div class="xp-bar-fill" style="width: ${info.percent}%"></div>
+                    </div>
+                </div>
+            `;
+            list.appendChild(item);
+        });
+    }
+
+    // Renders contributor cards for managing
+    function renderManageContributors() {
+        const grid = document.getElementById('contributors-manage-grid');
+        grid.innerHTML = '';
+
+        state.contributors.forEach(c => {
+            const initials = getInitials(c.name);
+            const info = calculateLevelInfo(c.xp);
+
+            const card = document.createElement('div');
+            card.className = 'contributor-card';
+            
+            let pluginCount = 0;
+            if (c.socials) {
+                if (c.socials.twitter) pluginCount++;
+                if (c.socials.github) pluginCount++;
+                if (c.socials.linkedin) pluginCount++;
+                if (c.socials.instagram) pluginCount++;
+            }
+
+            card.innerHTML = `
+                <div class="avatar-circle avatar-${c.avatar}" onclick="app.showProfileDetail('${c.id}')" style="cursor:pointer;">${initials}</div>
+                <h4>${c.name}</h4>
+                <div class="contributor-card-stats">
+                    Lvl ${info.level} • ${c.xp} XP<br>
+                    <span style="font-size:0.7rem; color:var(--text-secondary);">${pluginCount} linked plugin(s)</span>
+                </div>
+                <div class="contributor-card-actions">
+                    <button class="action-icon" onclick="app.showContributorModal('${c.id}')" title="Edit Profile"><i class="fas fa-edit"></i></button>
+                    <button class="action-icon danger-btn" onclick="app.deleteContributor('${c.id}')" title="Delete Profile"><i class="fas fa-trash"></i></button>
+                </div>
+            `;
+            grid.appendChild(card);
+        });
+    }
+
+    // Contributor addition/modification modals
+    function showContributorModal(id = '') {
+        if (!state.isAdminUnlocked) {
+            showPinPrompt(null, () => showContributorModal(id));
+            return;
+        }
+        document.getElementById('contributor-modal').classList.add('active');
+        if (id) {
+            const c = state.contributors.find(x => x.id === id);
+            if (c) {
+                document.getElementById('contributor-modal-title').textContent = "Edit Contributor";
+                document.getElementById('contributor-id').value = c.id;
+                document.getElementById('contributor-name').value = c.name;
+                document.getElementById('contributor-avatar').value = c.avatar;
+                
+                document.getElementById('social-twitter').value = c.socials ? (c.socials.twitter || '') : '';
+                document.getElementById('social-github').value = c.socials ? (c.socials.github || '') : '';
+                document.getElementById('social-linkedin').value = c.socials ? (c.socials.linkedin || '') : '';
+                document.getElementById('social-instagram').value = c.socials ? (c.socials.instagram || '') : '';
+            }
+        } else {
+            document.getElementById('contributor-modal-title').textContent = "Add Contributor";
+            document.getElementById('contributor-form').reset();
+            document.getElementById('contributor-id').value = '';
+        }
+    }
+
+    function closeContributorModal() {
+        document.getElementById('contributor-modal').classList.remove('active');
+        document.getElementById('contributor-form').reset();
+        document.getElementById('contributor-id').value = '';
+    }
+
+    function handleContributorSubmit(e) {
+        e.preventDefault();
+        const id = document.getElementById('contributor-id').value;
+        const name = document.getElementById('contributor-name').value;
+        const avatar = document.getElementById('contributor-avatar').value;
+        
+        const socials = {
+            twitter: document.getElementById('social-twitter').value.trim(),
+            github: document.getElementById('social-github').value.trim(),
+            linkedin: document.getElementById('social-linkedin').value.trim(),
+            instagram: document.getElementById('social-instagram').value.trim()
+        };
+
+        if (id) {
+            const c = state.contributors.find(x => x.id === id);
+            if (c) {
+                c.name = name;
+                c.avatar = avatar;
+                c.socials = socials;
+                
+                checkAndAwardBadges(c);
+                showToast("Contributor profile updated.");
+            }
+        } else {
+            const newCont = {
+                id: generateId(),
+                name: name,
+                avatar: avatar,
+                xp: 0,
+                level: 1,
+                socials: socials,
+                badges: [],
+                stats: { totalSalesVolume: 0, totalSalesCount: 0, totalStockAdjustments: 0, manualContributionsCount: 0 }
+            };
+            
+            checkAndAwardBadges(newCont);
+            state.contributors.push(newCont);
+            
+            // Set as active if none set
+            if (!state.activeContributorId) {
+                state.activeContributorId = newCont.id;
+            }
+            
+            showToast("New volunteer contributor added successfully!");
+        }
+
+        saveState();
+        closeContributorModal();
+        renderLeaderboardView();
+    }
+
+    function deleteContributor(id) {
+        if (!state.isAdminUnlocked) {
+            showPinPrompt(null, () => deleteContributor(id));
+            return;
+        }
+        const c = state.contributors.find(x => x.id === id);
+        if (c && confirm(`Are you sure you want to remove ${c.name}? This will clear all their accumulated XP!`)) {
+            state.contributors = state.contributors.filter(x => x.id !== id);
+            if (state.activeContributorId === id) {
+                state.activeContributorId = state.contributors.length > 0 ? state.contributors[0].id : '';
+            }
+            saveState();
+            showToast("Contributor removed.");
+            renderLeaderboardView();
+        }
+    }
+
+    // Manual Activities logger
+    function showLogContributionModal() {
+        if (!state.isAdminUnlocked) {
+            showPinPrompt(null, showLogContributionModal);
+            return;
+        }
+        if (state.contributors.length === 0) {
+            showToast("Please add at least one contributor first!");
+            return;
+        }
+        updateContributorHeaderSelector(); // populates select
+        document.getElementById('log-contribution-modal').classList.add('active');
+    }
+
+    function closeLogContributionModal() {
+        document.getElementById('log-contribution-modal').classList.remove('active');
+        document.getElementById('log-contribution-form').reset();
+        document.getElementById('custom-xp-group').style.display = 'none';
+    }
+
+    function updateManualXPPrediction(val) {
+        const customGroup = document.getElementById('custom-xp-group');
+        if (val === 'other') {
+            customGroup.style.display = 'block';
+            document.getElementById('log-custom-xp').required = true;
+        } else {
+            customGroup.style.display = 'none';
+            document.getElementById('log-custom-xp').required = false;
+        }
+    }
+
+    function handleLogContributionSubmit(e) {
+        e.preventDefault();
+        const cid = document.getElementById('log-contributor-select').value;
+        const type = document.getElementById('log-activity-select').value;
+        const notes = document.getElementById('log-notes').value;
+        
+        let xpGranted = 0;
+        if (type === 'event') xpGranted = 50;
+        else if (type === 'meeting') xpGranted = 20;
+        else if (type === 'marketing') xpGranted = 30;
+        else if (type === 'organization') xpGranted = 100;
+        else if (type === 'other') {
+            xpGranted = parseInt(document.getElementById('log-custom-xp').value) || 10;
+        }
+
+        awardXP(cid, xpGranted, 'manual', notes);
+        closeLogContributionModal();
+        renderLeaderboardView();
+    }
+
+    // ==========================================================================
+    // SECURITY ACCESS & PASSCODE LOCK ENGINE
+    // ==========================================================================
+
+    function updateLockUI() {
+        const lockBtn = document.getElementById('admin-lock-btn');
+        if (lockBtn) {
+            if (state.isAdminUnlocked) {
+                lockBtn.innerHTML = '<i class="fas fa-lock-open"></i>';
+                lockBtn.classList.add('unlocked');
+                lockBtn.title = 'Admin Mode Unlocked';
+            } else {
+                lockBtn.innerHTML = '<i class="fas fa-lock"></i>';
+                lockBtn.classList.remove('unlocked');
+                lockBtn.title = 'Admin Mode Locked';
+            }
+        }
+    }
+
+    function toggleAdminLock() {
+        if (state.isAdminUnlocked) {
+            state.isAdminUnlocked = false;
+            updateLockUI();
+            showToast('Admin session locked.');
+            
+            // Redirect to dashboard if in admin-only section
+            const activeNavBtn = document.querySelector('.nav-item.active');
+            if (activeNavBtn) {
+                const target = activeNavBtn.dataset.target;
+                if (target === 'inventory' || target === 'reports') {
+                    navigate('dashboard');
+                }
+            }
+            if (state.activeLeaderboardTab === 'manage') {
+                switchLeaderboardTab('board');
+            }
+        } else {
+            showPinPrompt();
+        }
+    }
+
+    function showPinPrompt(navTarget = null, actionCallback = null) {
+        pendingNavTarget = navTarget;
+        pendingAction = actionCallback;
+        enteredPin = '';
+        updatePinDots();
+        
+        const pinMsg = document.getElementById('pin-message');
+        if (pinMsg) {
+            pinMsg.textContent = 'Enter passcode to unlock admin actions';
+            pinMsg.classList.remove('error-text');
+        }
+        
+        const pinDots = document.getElementById('pin-dots');
+        if (pinDots) {
+            pinDots.classList.remove('error', 'success');
+        }
+        
+        document.getElementById('pin-modal').classList.add('active');
+    }
+
+    function closePinModal() {
+        document.getElementById('pin-modal').classList.remove('active');
+        enteredPin = '';
+        pendingNavTarget = null;
+        pendingAction = null;
+    }
+
+    function updatePinDots() {
+        const dots = document.querySelectorAll('#pin-dots .dot');
+        dots.forEach((dot, index) => {
+            if (index < enteredPin.length) {
+                dot.classList.add('active');
+            } else {
+                dot.classList.remove('active');
+            }
+        });
+    }
+
+    function handlePinKey(key) {
+        const pinDots = document.getElementById('pin-dots');
+        const pinMsg = document.getElementById('pin-message');
+        
+        if (pinDots && (pinDots.classList.contains('error') || pinDots.classList.contains('success'))) {
+            pinDots.classList.remove('error', 'success');
+            if (pinMsg) {
+                pinMsg.classList.remove('error-text');
+                pinMsg.textContent = 'Enter passcode to unlock admin actions';
+            }
+            enteredPin = '';
+            updatePinDots();
+        }
+
+        if (key === 'clear') {
+            enteredPin = '';
+            updatePinDots();
+        } else if (key === 'backspace') {
+            enteredPin = enteredPin.slice(0, -1);
+            updatePinDots();
+        } else if (/^\d$/.test(key)) {
+            if (enteredPin.length < 8) {
+                enteredPin += key;
+                updatePinDots();
+                
+                if (enteredPin.length === state.adminPin.length) {
+                    verifyPin();
+                }
+            }
+        }
+    }
+
+    function verifyPin() {
+        const pinDots = document.getElementById('pin-dots');
+        const pinMsg = document.getElementById('pin-message');
+        const pinModalOverlay = document.getElementById('pin-modal');
+        const modalContent = pinModalOverlay ? pinModalOverlay.querySelector('.modal-content') : null;
+
+        if (enteredPin === state.adminPin) {
+            state.isAdminUnlocked = true;
+            updateLockUI();
+            if (pinDots) pinDots.classList.add('success');
+            if (pinMsg) pinMsg.textContent = 'Access Granted';
+            showToast('Admin access granted.');
+            
+            setTimeout(() => {
+                closePinModal();
+                if (pendingNavTarget) {
+                    navigate(pendingNavTarget);
+                } else if (pendingAction) {
+                    pendingAction();
+                }
+            }, 500);
+        } else {
+            if (pinDots) pinDots.classList.add('error');
+            if (modalContent) modalContent.classList.add('shake');
+            if (pinMsg) {
+                pinMsg.textContent = 'Incorrect PIN Code';
+                pinMsg.classList.add('error-text');
+            }
+            
+            setTimeout(() => {
+                if (modalContent) modalContent.classList.remove('shake');
+                enteredPin = '';
+                updatePinDots();
+            }, 600);
+        }
+    }
+
+    function showChangePinModal() {
+        if (!state.isAdminUnlocked) {
+            showPinPrompt(null, showChangePinModal);
+            return;
+        }
+        document.getElementById('change-pin-modal').classList.add('active');
+    }
+
+    function closeChangePinModal() {
+        document.getElementById('change-pin-modal').classList.remove('active');
+        document.getElementById('change-pin-form').reset();
+    }
+
+    function handleChangePinSubmit(e) {
+        e.preventDefault();
+        const currentPinVal = document.getElementById('current-pin').value;
+        const newPinVal = document.getElementById('new-pin').value;
+        const confirmPinVal = document.getElementById('confirm-new-pin').value;
+
+        if (currentPinVal !== state.adminPin) {
+            showToast('Current PIN is incorrect!');
+            return;
+        }
+
+        if (newPinVal.length < 4 || newPinVal.length > 8) {
+            showToast('New PIN must be between 4 and 8 digits!');
+            return;
+        }
+
+        if (newPinVal !== confirmPinVal) {
+            showToast('New PIN confirmations do not match!');
+            return;
+        }
+
+        state.adminPin = newPinVal;
+        saveState();
+        closeChangePinModal();
+        showToast('Admin PIN changed successfully.');
+    }
+
+    // Detailed Profile Display Modal
+    function showProfileDetail(id) {
+        const c = state.contributors.find(x => x.id === id);
+        if (!c) return;
+
+        const info = calculateLevelInfo(c.xp);
+        const initials = getInitials(c.name);
+
+        // Social brand buttons rendering
+        let socialsHtml = '';
+        if (c.socials) {
+            if (c.socials.twitter) socialsHtml += `<a href="${c.socials.twitter}" target="_blank" class="social-btn twitter" title="Twitter"><i class="fab fa-twitter"></i></a>`;
+            if (c.socials.github) socialsHtml += `<a href="${c.socials.github}" target="_blank" class="social-btn github" title="GitHub"><i class="fab fa-github"></i></a>`;
+            if (c.socials.linkedin) socialsHtml += `<a href="${c.socials.linkedin}" target="_blank" class="social-btn linkedin" title="LinkedIn"><i class="fab fa-linkedin"></i></a>`;
+            if (c.socials.instagram) socialsHtml += `<a href="${c.socials.instagram}" target="_blank" class="social-btn instagram" title="Instagram"><i class="fab fa-instagram"></i></a>`;
+        }
+
+        // Custom badges lists
+        const allBadges = [
+            { id: 'sales_rookie', name: 'First Milestone', icon: 'fas fa-baby-carriage', desc: 'Completed first checkout or logged activity', class: 'badge-rookie' },
+            { id: 'sales_guru', name: 'Sales Champ', icon: 'fas fa-sack-dollar', desc: 'Managed $200+ sales volume checkouts', class: 'badge-sales-guru' },
+            { id: 'stock_master', name: 'Stock Master', icon: 'fas fa-dolly', desc: 'Performed 10+ inventory updates', class: 'badge-stock-master' },
+            { id: 'socialite', name: 'Social Connector', icon: 'fas fa-circle-nodes', desc: 'Connected 2+ social plugins', class: 'badge-socialite' },
+            { id: 'legendary', name: 'Grandmaster', icon: 'fas fa-award', desc: 'Reached Level 5+ in club', class: 'badge-legendary' }
+        ];
+
+        let badgesHtml = '';
+        allBadges.forEach(b => {
+            const hasBadge = c.badges && c.badges.includes(b.id);
+            if (hasBadge) {
+                badgesHtml += `
+                    <div class="badge-pill ${b.class}" title="${b.desc}">
+                        <i class="${b.icon}"></i>
+                        <span>${b.name}</span>
+                    </div>
+                `;
+            } else {
+                badgesHtml += `
+                    <div class="badge-pill locked" title="Locked: ${b.desc}">
+                        <i class="fas fa-lock"></i>
+                        <span>${b.name}</span>
+                    </div>
+                `;
+            }
+        });
+
+        const body = document.getElementById('profile-detail-body');
+        body.innerHTML = `
+            <div class="profile-details-header">
+                <div class="avatar-circle avatar-${c.avatar}">${initials}</div>
+                <h3>${c.name}</h3>
+                <span class="level-label">Level ${info.level} Volunteer</span>
+                <div class="xp-bar-container" style="width: 180px; margin-bottom: 0.5rem;">
+                    <div class="xp-bar-fill" style="width: ${info.percent}%"></div>
+                </div>
+                <div style="font-size:0.75rem; color:var(--text-secondary); margin-bottom:0.75rem;">
+                    ${c.xp} XP / ${info.totalNeededXP} XP (${info.percent}% towards Level ${info.level + 1})
+                </div>
+                <div class="social-plugins">
+                    ${socialsHtml || '<span style="font-size: 0.75rem; color: var(--text-secondary); font-style:italic;">No social profiles linked yet</span>'}
+                </div>
+            </div>
+
+            <div class="profile-stats-grid">
+                <div class="profile-stat-box">
+                    <div class="profile-stat-val">$${c.stats.totalSalesVolume.toFixed(2)}</div>
+                    <div class="profile-stat-lbl">Sales Revenue</div>
+                </div>
+                <div class="profile-stat-box">
+                    <div class="profile-stat-val">${c.stats.totalSalesCount}</div>
+                    <div class="profile-stat-lbl">Checkouts Done</div>
+                </div>
+                <div class="profile-stat-box">
+                    <div class="profile-stat-val">${c.stats.totalStockAdjustments}</div>
+                    <div class="profile-stat-lbl">Stock Updates</div>
+                </div>
+                <div class="profile-stat-box">
+                    <div class="profile-stat-val">${c.stats.manualContributionsCount}</div>
+                    <div class="profile-stat-lbl">Manual Activities</div>
+                </div>
+            </div>
+
+            <div class="profile-badges-section">
+                <h4>Achievements & Badges</h4>
+                <div class="badges-container">
+                    ${badgesHtml}
+                </div>
+            </div>
+        `;
+
+        document.getElementById('profile-detail-modal').classList.add('active');
+    }
+
+    function closeProfileDetailModal() {
+        document.getElementById('profile-detail-modal').classList.remove('active');
     }
 
     // --- Initialization ---
@@ -438,9 +1345,41 @@ const app = (function() {
         document.getElementById('pos-search').addEventListener('input', (e) => {
             renderPOS(e.target.value);
         });
+        
+        // Gamified Listeners
+        const contForm = document.getElementById('contributor-form');
+        if (contForm) contForm.addEventListener('submit', handleContributorSubmit);
+        
+        const logForm = document.getElementById('log-contribution-form');
+        if (logForm) logForm.addEventListener('submit', handleLogContributionSubmit);
 
-        // Start on dashboard
+        // Security Event Listeners
+        document.getElementById('admin-lock-btn').addEventListener('click', toggleAdminLock);
+        
+        const changePinForm = document.getElementById('change-pin-form');
+        if (changePinForm) changePinForm.addEventListener('submit', handleChangePinSubmit);
+
+        // Physical Keyboard listener for PIN entry
+        document.addEventListener('keydown', (e) => {
+            const pinModal = document.getElementById('pin-modal');
+            if (pinModal && pinModal.classList.contains('active')) {
+                if (/^\d$/.test(e.key)) {
+                    handlePinKey(e.key);
+                } else if (e.key === 'Backspace') {
+                    handlePinKey('backspace');
+                } else if (e.key === 'Escape') {
+                    closePinModal();
+                } else if (e.key === 'c' || e.key === 'C') {
+                    handlePinKey('clear');
+                }
+            }
+        });
+
+        updateLockUI();
+
+        // Start on dashboard and sync header active selector
         navigate('dashboard');
+        updateContributorHeaderSelector();
     }
 
     // Public API
@@ -458,7 +1397,26 @@ const app = (function() {
         checkout,
         exportInventoryCSV,
         exportSalesCSV,
-        deleteSale
+        deleteSale,
+        
+        // Gamified details
+        setActiveContributor,
+        switchLeaderboardTab,
+        showContributorModal,
+        closeContributorModal,
+        deleteContributor,
+        showLogContributionModal,
+        closeLogContributionModal,
+        updateManualXPPrediction,
+        showProfileDetail,
+        closeProfileDetailModal,
+
+        // Security System
+        toggleAdminLock,
+        closePinModal,
+        handlePinKey,
+        showChangePinModal,
+        closeChangePinModal
     };
 })();
 
