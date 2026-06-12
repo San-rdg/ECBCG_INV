@@ -32,7 +32,18 @@ const app = (function() {
         const storedActiveContributorId = localStorage.getItem('club_active_contributor_id');
         const storedPin = localStorage.getItem('club_admin_pin');
 
-        if (storedInventory) state.inventory = JSON.parse(storedInventory);
+        if (storedInventory) {
+            state.inventory = JSON.parse(storedInventory);
+        } else {
+            // Seed default inventory items pre-associated with makers
+            state.inventory = [
+                { id: 'item1', name: 'Classic Club Tee', price: 20.00, stock: 15, category: 'Merch', makerId: 'c1' },
+                { id: 'item2', name: 'Silicon Wristband', price: 5.00, stock: 50, category: 'Merch', makerId: 'c2' },
+                { id: 'item3', name: 'Club Sticker Pack', price: 3.00, stock: 30, category: 'Merch', makerId: 'c3' },
+                { id: 'item4', name: 'Energy Drink', price: 2.50, stock: 12, category: 'Snacks', makerId: 'c4' }
+            ];
+        }
+
         if (storedSales) state.sales = JSON.parse(storedSales);
         if (storedCart) state.cart = JSON.parse(storedCart);
         if (storedTheme) {
@@ -49,7 +60,7 @@ const app = (function() {
         if (storedContributors) {
             state.contributors = JSON.parse(storedContributors);
         } else {
-            // Seed base volunteer list to showcase the beautiful podium and leaderboard at start
+            // Seed base volunteer list with maker stats to showcase leaderboard at start
             state.contributors = [
                 {
                     id: 'c1',
@@ -64,7 +75,7 @@ const app = (function() {
                         instagram: 'https://instagram.com/alexrivera'
                     },
                     badges: ['sales_rookie', 'sales_guru', 'stock_master', 'socialite', 'legendary'],
-                    stats: { totalSalesVolume: 245.50, totalSalesCount: 12, totalStockAdjustments: 14, manualContributionsCount: 3 }
+                    stats: { totalSalesVolume: 245.50, totalSalesCount: 12, totalStockAdjustments: 14, manualContributionsCount: 3, makerRevenue: 240.00, makerProductsSold: 12 }
                 },
                 {
                     id: 'c2',
@@ -79,7 +90,7 @@ const app = (function() {
                         instagram: ''
                     },
                     badges: ['sales_rookie', 'stock_master'],
-                    stats: { totalSalesVolume: 85.00, totalSalesCount: 5, totalStockAdjustments: 11, manualContributionsCount: 1 }
+                    stats: { totalSalesVolume: 85.00, totalSalesCount: 5, totalStockAdjustments: 11, manualContributionsCount: 1, makerRevenue: 125.00, makerProductsSold: 25 }
                 },
                 {
                     id: 'c3',
@@ -94,7 +105,7 @@ const app = (function() {
                         instagram: 'https://instagram.com/jordansmith'
                     },
                     badges: ['sales_rookie', 'socialite'],
-                    stats: { totalSalesVolume: 42.00, totalSalesCount: 3, totalStockAdjustments: 3, manualContributionsCount: 2 }
+                    stats: { totalSalesVolume: 42.00, totalSalesCount: 3, totalStockAdjustments: 3, manualContributionsCount: 2, makerRevenue: 45.00, makerProductsSold: 15 }
                 },
                 {
                     id: 'c4',
@@ -109,7 +120,7 @@ const app = (function() {
                         instagram: ''
                     },
                     badges: ['sales_rookie'],
-                    stats: { totalSalesVolume: 12.00, totalSalesCount: 1, totalStockAdjustments: 0, manualContributionsCount: 0 }
+                    stats: { totalSalesVolume: 12.00, totalSalesCount: 1, totalStockAdjustments: 0, manualContributionsCount: 0, makerRevenue: 10.00, makerProductsSold: 4 }
                 }
             ];
         }
@@ -149,12 +160,6 @@ const app = (function() {
 
     // --- Navigation & UI ---
     function navigate(targetView) {
-        // Navigation Guards for Protected Sections
-        if ((targetView === 'inventory' || targetView === 'reports') && !state.isAdminUnlocked) {
-            showPinPrompt(targetView);
-            return;
-        }
-
         // Update nav buttons
         document.querySelectorAll('.nav-item').forEach(btn => {
             if (btn.dataset.target === targetView) {
@@ -226,6 +231,9 @@ const app = (function() {
             if (item.stock <= 5 && item.stock > 0) stockClass = 'low';
             if (item.stock === 0) stockClass = 'out';
 
+            const maker = state.contributors.find(c => c.id === item.makerId);
+            const makerName = maker ? maker.name : 'Unknown Maker';
+
             const div = document.createElement('div');
             div.className = 'inventory-item';
             div.innerHTML = `
@@ -235,8 +243,9 @@ const app = (function() {
                         <span>${formatCurrency(item.price)}</span>
                         <span class="stock-badge ${stockClass}">${item.stock} in stock</span>
                     </div>
+                    <div class="maker-label"><i class="fas fa-hammer"></i> Made by ${makerName}</div>
                 </div>
-                <div class="item-actions">
+                <div class="item-actions admin-only">
                     <button class="action-icon" onclick="app.adjustStock('${item.id}', 1)"><i class="fas fa-plus"></i></button>
                     <button class="action-icon" onclick="app.adjustStock('${item.id}', -1)"><i class="fas fa-minus"></i></button>
                     <button class="action-icon" onclick="app.editItem('${item.id}')"><i class="fas fa-edit"></i></button>
@@ -285,6 +294,19 @@ const app = (function() {
             showPinPrompt(null, showItemModal);
             return;
         }
+        
+        // Populate Product Maker dropdown
+        const makerSelect = document.getElementById('item-maker');
+        if (makerSelect) {
+            makerSelect.innerHTML = '<option value="" disabled selected>-- Select Maker --</option>';
+            state.contributors.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c.id;
+                opt.textContent = c.name;
+                makerSelect.appendChild(opt);
+            });
+        }
+
         document.getElementById('item-modal').classList.add('active');
     }
     function closeItemModal() {
@@ -301,13 +323,26 @@ const app = (function() {
         }
         const item = state.inventory.find(i => i.id === id);
         if (item) {
+            // Populate Product Maker dropdown first
+            const makerSelect = document.getElementById('item-maker');
+            if (makerSelect) {
+                makerSelect.innerHTML = '<option value="" disabled selected>-- Select Maker --</option>';
+                state.contributors.forEach(c => {
+                    const opt = document.createElement('option');
+                    opt.value = c.id;
+                    opt.textContent = c.name;
+                    makerSelect.appendChild(opt);
+                });
+                makerSelect.value = item.makerId || "";
+            }
+
             document.getElementById('item-id').value = item.id;
             document.getElementById('item-name').value = item.name;
             document.getElementById('item-price').value = item.price;
             document.getElementById('item-stock').value = item.stock;
             document.getElementById('item-category').value = item.category || "";
             document.getElementById('modal-title').textContent = "Edit Item";
-            showItemModal();
+            document.getElementById('item-modal').classList.add('active');
         }
     }
 
@@ -319,7 +354,8 @@ const app = (function() {
             name: document.getElementById('item-name').value,
             price: parseFloat(document.getElementById('item-price').value),
             stock: parseInt(document.getElementById('item-stock').value),
-            category: document.getElementById('item-category').value
+            category: document.getElementById('item-category').value,
+            makerId: document.getElementById('item-maker').value
         };
 
         if (id) {
@@ -352,6 +388,9 @@ const app = (function() {
         );
 
         filtered.forEach(item => {
+            const maker = state.contributors.find(c => c.id === item.makerId);
+            const makerName = maker ? maker.name : 'Unknown Maker';
+
             const div = document.createElement('div');
             div.className = 'pos-product-card';
             div.onclick = () => addToCart(item);
@@ -359,6 +398,7 @@ const app = (function() {
                 <h4>${item.name}</h4>
                 <div class="price">${formatCurrency(item.price)}</div>
                 <div style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 0.25rem;">Stock: ${item.stock}</div>
+                <div class="maker-label" style="justify-content: center;"><i class="fas fa-hammer"></i> ${makerName}</div>
             `;
             grid.appendChild(div);
         });
@@ -443,12 +483,23 @@ const app = (function() {
         if (state.cart.length === 0) return;
 
         let total = 0;
-        // Deduct stock
+        // Deduct stock and credit product makers
         state.cart.forEach(cartItem => {
             total += (cartItem.price * cartItem.qty);
             const invItem = state.inventory.find(i => i.id === cartItem.id);
             if (invItem) {
                 invItem.stock -= cartItem.qty;
+                
+                // Credit maker statistics
+                if (invItem.makerId) {
+                    const maker = state.contributors.find(c => c.id === invItem.makerId);
+                    if (maker) {
+                        if (!maker.stats.makerRevenue) maker.stats.makerRevenue = 0;
+                        if (!maker.stats.makerProductsSold) maker.stats.makerProductsSold = 0;
+                        maker.stats.makerRevenue += (cartItem.price * cartItem.qty);
+                        maker.stats.makerProductsSold += cartItem.qty;
+                    }
+                }
             }
         });
 
@@ -515,7 +566,7 @@ const app = (function() {
                 </div>
                 <div style="display: flex; align-items: center; gap: 1rem;">
                     <div class="sales-amount">${formatCurrency(sale.total)}</div>
-                    <button class="action-icon danger-btn" onclick="app.deleteSale('${sale.id}')" title="Delete Sale"><i class="fas fa-trash"></i></button>
+                    <button class="action-icon danger-btn admin-only" onclick="app.deleteSale('${sale.id}')" title="Delete Sale"><i class="fas fa-trash"></i></button>
                 </div>
             `;
             historyContainer.appendChild(div);
@@ -749,8 +800,12 @@ const app = (function() {
 
     // Renders Podium + ranked list
     function renderLeaderboard() {
-        // Sort contributors by XP descending
-        const sorted = [...state.contributors].sort((a, b) => b.xp - a.xp);
+        // Sort contributors by makerRevenue descending
+        const sorted = [...state.contributors].sort((a, b) => {
+            const revA = a.stats.makerRevenue || 0;
+            const revB = b.stats.makerRevenue || 0;
+            return revB - revA;
+        });
 
         // Renders Podium (Top 3)
         const podium = document.getElementById('leaderboard-podium');
@@ -771,7 +826,6 @@ const app = (function() {
 
             if (c) {
                 const initials = getInitials(c.name);
-                const info = calculateLevelInfo(c.xp);
                 const crown = p.pos === 1 ? '<i class="fas fa-crown podium-crown"></i>' : '';
 
                 col.innerHTML = `
@@ -781,7 +835,8 @@ const app = (function() {
                         <div class="podium-rank-badge">${p.pos}</div>
                     </div>
                     <div class="podium-name">${c.name}</div>
-                    <div class="podium-xp">Lvl ${info.level} • ${c.xp} XP</div>
+                    <div class="podium-xp" style="font-size: 0.8rem; font-weight:600; color: var(--success-color);">${formatCurrency(c.stats.makerRevenue || 0)}</div>
+                    <div class="podium-xp" style="font-size: 0.7rem; color: var(--text-secondary); margin-top:0.1rem;">${c.stats.makerProductsSold || 0} sold</div>
                     <div class="podium-block"></div>
                 `;
             } else {
@@ -791,7 +846,7 @@ const app = (function() {
                         <div class="podium-rank-badge">${p.pos}</div>
                     </div>
                     <div class="podium-name">Empty</div>
-                    <div class="podium-xp">0 XP</div>
+                    <div class="podium-xp">$0.00</div>
                     <div class="podium-block"></div>
                 `;
             }
@@ -811,16 +866,6 @@ const app = (function() {
         standardRanks.forEach((c, i) => {
             const rank = i + 4;
             const initials = getInitials(c.name);
-            const info = calculateLevelInfo(c.xp);
-
-            // Construct social plugins icons
-            let socialsHtml = '';
-            if (c.socials) {
-                if (c.socials.twitter) socialsHtml += `<a href="${c.socials.twitter}" target="_blank" class="social-btn twitter" onclick="e.stopPropagation()"><i class="fab fa-twitter"></i></a>`;
-                if (c.socials.github) socialsHtml += `<a href="${c.socials.github}" target="_blank" class="social-btn github" onclick="e.stopPropagation()"><i class="fab fa-github"></i></a>`;
-                if (c.socials.linkedin) socialsHtml += `<a href="${c.socials.linkedin}" target="_blank" class="social-btn linkedin" onclick="e.stopPropagation()"><i class="fab fa-linkedin"></i></a>`;
-                if (c.socials.instagram) socialsHtml += `<a href="${c.socials.instagram}" target="_blank" class="social-btn instagram" onclick="e.stopPropagation()"><i class="fab fa-instagram"></i></a>`;
-            }
 
             const item = document.createElement('div');
             item.className = 'leaderboard-item';
@@ -831,18 +876,11 @@ const app = (function() {
                 <div class="leaderboard-info">
                     <div class="leaderboard-name-row">
                         <span class="leaderboard-name">${c.name}</span>
-                        <span class="level-badge">Lvl ${info.level}</span>
-                    </div>
-                    <div class="social-plugins">
-                        ${socialsHtml || '<span style="font-size: 0.7rem; color: var(--text-secondary); font-style:italic;">No socials linked</span>'}
                     </div>
                 </div>
-                <div class="leaderboard-xp-display">
-                    <span class="leaderboard-xp-number">${c.xp} XP</span>
-                    <span class="leaderboard-xp-label">${info.percent}% progress</span>
-                    <div class="xp-bar-container" style="width: 80px; margin-top: 0.2rem; height: 4px;">
-                        <div class="xp-bar-fill" style="width: ${info.percent}%"></div>
-                    </div>
+                <div class="leaderboard-xp-display" style="text-align: right;">
+                    <span class="leaderboard-xp-number" style="color: var(--success-color); font-weight:700;">${formatCurrency(c.stats.makerRevenue || 0)}</span>
+                    <span class="leaderboard-xp-label">${c.stats.makerProductsSold || 0} products sold</span>
                 </div>
             `;
             list.appendChild(item);
@@ -950,7 +988,7 @@ const app = (function() {
                 level: 1,
                 socials: socials,
                 badges: [],
-                stats: { totalSalesVolume: 0, totalSalesCount: 0, totalStockAdjustments: 0, manualContributionsCount: 0 }
+                stats: { totalSalesVolume: 0, totalSalesCount: 0, totalStockAdjustments: 0, manualContributionsCount: 0, makerRevenue: 0, makerProductsSold: 0 }
             };
             
             checkAndAwardBadges(newCont);
@@ -1059,17 +1097,10 @@ const app = (function() {
     function toggleAdminLock() {
         if (state.isAdminUnlocked) {
             state.isAdminUnlocked = false;
+            document.body.classList.remove('admin-active');
             updateLockUI();
             showToast('Admin session locked.');
             
-            // Redirect to dashboard if in admin-only section
-            const activeNavBtn = document.querySelector('.nav-item.active');
-            if (activeNavBtn) {
-                const target = activeNavBtn.dataset.target;
-                if (target === 'inventory' || target === 'reports') {
-                    navigate('dashboard');
-                }
-            }
             if (state.activeLeaderboardTab === 'manage') {
                 switchLeaderboardTab('board');
             }
@@ -1156,6 +1187,7 @@ const app = (function() {
 
         if (enteredPin === state.adminPin) {
             state.isAdminUnlocked = true;
+            document.body.classList.add('admin-active');
             updateLockUI();
             if (pinDots) pinDots.classList.add('success');
             if (pinMsg) pinMsg.textContent = 'Access Granted';
@@ -1230,10 +1262,38 @@ const app = (function() {
         const c = state.contributors.find(x => x.id === id);
         if (!c) return;
 
-        const info = calculateLevelInfo(c.xp);
         const initials = getInitials(c.name);
+        const info = calculateLevelInfo(c.xp);
+        const body = document.getElementById('profile-detail-body');
 
-        // Social brand buttons rendering
+        if (!state.isAdminUnlocked) {
+            // Simplified Guest View
+            body.innerHTML = `
+                <div class="profile-details-header">
+                    <div class="avatar-circle avatar-${c.avatar}">${initials}</div>
+                    <h3>${c.name}</h3>
+                    <span class="level-label">Level ${info.level} Volunteer</span>
+                </div>
+
+                <div class="profile-stats-grid" style="grid-template-columns: 1fr 1fr;">
+                    <div class="profile-stat-box">
+                        <div class="profile-stat-val">${formatCurrency(c.stats.makerRevenue || 0)}</div>
+                        <div class="profile-stat-lbl">Maker Revenue</div>
+                    </div>
+                    <div class="profile-stat-box">
+                        <div class="profile-stat-val">${c.stats.makerProductsSold || 0}</div>
+                        <div class="profile-stat-lbl">Products Sold</div>
+                    </div>
+                </div>
+                <div style="text-align: center; font-size: 0.8rem; color: var(--text-secondary); margin-top: 1rem; font-style: italic;">
+                    <i class="fas fa-lock"></i> Advanced stats and links are restricted to Admin Mode.
+                </div>
+            `;
+            document.getElementById('profile-detail-modal').classList.add('active');
+            return;
+        }
+
+        // Full Admin View (Existing Detailed Profile with socials & badges)
         let socialsHtml = '';
         if (c.socials) {
             if (c.socials.twitter) socialsHtml += `<a href="${c.socials.twitter}" target="_blank" class="social-btn twitter" title="Twitter"><i class="fab fa-twitter"></i></a>`;
@@ -1242,7 +1302,6 @@ const app = (function() {
             if (c.socials.instagram) socialsHtml += `<a href="${c.socials.instagram}" target="_blank" class="social-btn instagram" title="Instagram"><i class="fab fa-instagram"></i></a>`;
         }
 
-        // Custom badges lists
         const allBadges = [
             { id: 'sales_rookie', name: 'First Milestone', icon: 'fas fa-baby-carriage', desc: 'Completed first checkout or logged activity', class: 'badge-rookie' },
             { id: 'sales_guru', name: 'Sales Champ', icon: 'fas fa-sack-dollar', desc: 'Managed $200+ sales volume checkouts', class: 'badge-sales-guru' },
@@ -1271,7 +1330,6 @@ const app = (function() {
             }
         });
 
-        const body = document.getElementById('profile-detail-body');
         body.innerHTML = `
             <div class="profile-details-header">
                 <div class="avatar-circle avatar-${c.avatar}">${initials}</div>
@@ -1376,6 +1434,7 @@ const app = (function() {
         });
 
         updateLockUI();
+        document.body.classList.toggle('admin-active', state.isAdminUnlocked);
 
         // Start on dashboard and sync header active selector
         navigate('dashboard');
