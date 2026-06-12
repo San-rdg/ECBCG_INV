@@ -1387,3 +1387,22 @@ button {
     40%, 80% { transform: translateX(8px); }
 }
 
+/* Admin-only element hiding */
+body:not(.admin-active) .admin-only {
+    display: none !important;
+}
+
+/* Product Maker styling */
+.maker-label {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin-top: 0.25rem;
+}
+
+.maker-label i {
+    color: var(--primary-color);
+}
+
