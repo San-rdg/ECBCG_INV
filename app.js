@@ -4,6 +4,87 @@
  */
 
 const app = (function() {
+    let db; // Firebase Firestore instance
+    let initialSyncDone = false; // Flag to prevent overwriting with local data on first load
+
+    function initFirebase() {
+        const firebaseConfig = {
+            apiKey: "AIzaSyAMD3cqwFI9MsQkNMni3ZXJoXaZfds3bT8",
+            authDomain: "ecbcg-pos.firebaseapp.com",
+            projectId: "ecbcg-pos",
+            storageBucket: "ecbcg-pos.firebasestorage.app",
+            messagingSenderId: "950396174988",
+            appId: "1:950396174988:web:2d8fe7ae236c52cd9331a9",
+            measurementId: "G-7JPXHCEHMW"
+        };
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        db = firebase.firestore();
+
+        db.collection('appData').doc('globalState').onSnapshot((doc) => {
+            if (doc.exists) {
+                const data = doc.data();
+                state.inventory = data.inventory || [];
+                state.sales = data.sales || [];
+                state.contributors = data.contributors || [];
+                state.adminPin = data.adminPin || '1234';
+                
+                initialSyncDone = true;
+
+                // Re-render active views safely if DOM elements exist
+                const dashboardView = document.getElementById('view-dashboard');
+                if (dashboardView && dashboardView.classList.contains('active')) renderDashboard();
+                
+                const inventoryView = document.getElementById('view-inventory');
+                if (inventoryView && inventoryView.classList.contains('active')) {
+                    const searchInput = document.getElementById('inventory-search');
+                    renderInventory(searchInput ? searchInput.value : '');
+                }
+
+                const posView = document.getElementById('view-pos');
+                if (posView && posView.classList.contains('active')) {
+                    const searchInput = document.getElementById('pos-search');
+                    renderPOS(searchInput ? searchInput.value : '');
+                }
+
+                const reportsView = document.getElementById('view-reports');
+                if (reportsView && reportsView.classList.contains('active')) renderReports();
+
+                const leaderboardView = document.getElementById('view-leaderboard');
+                if (leaderboardView && leaderboardView.classList.contains('active')) {
+                    // renderLeaderboardView might not be accessible here due to scope or undefined, 
+                    // but it's defined inside app scope so it's fine.
+                    try {
+                        renderLeaderboardView();
+                    } catch(e) {}
+                }
+                
+                try {
+                    updateContributorHeaderSelector();
+                } catch(e) {}
+                
+            } else {
+                // If it doesn't exist, and we have local data, save it to Firestore
+                syncToFirebase();
+                initialSyncDone = true;
+            }
+        }, (error) => {
+            console.error("Error fetching from Firebase:", error);
+            showToast("Offline: Showing local data");
+        });
+    }
+
+    function syncToFirebase() {
+        if (!db) return;
+        db.collection('appData').doc('globalState').set({
+            inventory: state.inventory,
+            sales: state.sales,
+            contributors: state.contributors,
+            adminPin: state.adminPin
+        }, { merge: true }).catch(err => console.error("Error syncing to Firebase: ", err));
+    }
+
     // --- State Management ---
     let state = {
         inventory: [],
@@ -140,6 +221,9 @@ const app = (function() {
         localStorage.setItem('club_contributors', JSON.stringify(state.contributors));
         localStorage.setItem('club_active_contributor_id', state.activeContributorId);
         localStorage.setItem('club_admin_pin', state.adminPin);
+
+        // Also sync global state to Firebase
+        syncToFirebase();
     }
 
     // --- Utilities ---
@@ -1383,6 +1467,7 @@ const app = (function() {
     // --- Initialization ---
     function init() {
         loadState();
+        initFirebase();
         
         // Event Listeners
         document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
