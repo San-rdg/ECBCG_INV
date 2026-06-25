@@ -24,13 +24,12 @@
         <header class="app-header">
             <h1 id="header-title">Dashboard</h1>
             <div class="header-actions">
-                <div class="active-contributor-selector" id="active-contributor-header">
+                <div class="active-contributor-selector" id="active-role-header">
                     <i class="fas fa-user-circle select-icon"></i>
-                    <select id="active-contributor-select" onchange="app.setActiveContributor(this.value)">
+                    <select id="active-role-select" onchange="app.setActiveRole(this.value)">
                         <option value="">Guest User</option>
                     </select>
                 </div>
-                <button id="admin-lock-btn" class="icon-btn" title="Admin Mode Locked"><i class="fas fa-lock"></i></button>
                 <button id="theme-toggle" class="icon-btn"><i class="fas fa-moon"></i></button>
             </div>
         </header>
@@ -131,13 +130,6 @@
                     </div>
                 </div>
 
-                <div class="card security-actions admin-only">
-                    <h2>Admin Security</h2>
-                    <p class="export-desc">Change the admin PIN used to protect inventory, reports, and volunteer settings.</p>
-                    <div class="export-buttons">
-                        <button class="outline-btn" onclick="app.showChangePinModal()"><i class="fas fa-key"></i> Change Admin PIN</button>
-                    </div>
-                </div>
 
                 <div class="card recent-sales-list">
                     <h2>Recent Sales</h2>
@@ -355,65 +347,21 @@
             </div>
         </div>
 
-        <!-- PIN Keypad Modal -->
-        <div id="pin-modal" class="modal-overlay">
-            <div class="modal-content pin-modal-content" style="max-width: 360px;">
+        <!-- Password Modal -->
+        <div id="password-modal" class="modal-overlay">
+            <div class="modal-content" style="max-width: 360px;">
                 <div class="modal-header">
-                    <h2 id="pin-modal-title">Admin Access Required</h2>
-                    <button class="close-btn" onclick="app.closePinModal()"><i class="fas fa-times"></i></button>
+                    <h2 id="password-modal-title">Admin Access Required</h2>
+                    <button class="close-btn" onclick="app.closePasswordModal()"><i class="fas fa-times"></i></button>
                 </div>
-                <div class="pin-display-container">
-                    <div class="pin-dots" id="pin-dots">
-                        <span class="dot"></span>
-                        <span class="dot"></span>
-                        <span class="dot"></span>
-                        <span class="dot"></span>
-                    </div>
-                    <div class="pin-message" id="pin-message">Enter passcode to unlock admin actions</div>
-                </div>
-                <div class="pin-keypad">
-                    <button class="key-btn" onclick="app.handlePinKey('1')">1</button>
-                    <button class="key-btn" onclick="app.handlePinKey('2')">2</button>
-                    <button class="key-btn" onclick="app.handlePinKey('3')">3</button>
-                    <button class="key-btn" onclick="app.handlePinKey('4')">4</button>
-                    <button class="key-btn" onclick="app.handlePinKey('5')">5</button>
-                    <button class="key-btn" onclick="app.handlePinKey('6')">6</button>
-                    <button class="key-btn" onclick="app.handlePinKey('7')">7</button>
-                    <button class="key-btn" onclick="app.handlePinKey('8')">8</button>
-                    <button class="key-btn" onclick="app.handlePinKey('9')">9</button>
-                    <button class="key-btn danger-key" onclick="app.handlePinKey('clear')">C</button>
-                    <button class="key-btn" onclick="app.handlePinKey('0')">0</button>
-                    <button class="key-btn action-key" onclick="app.handlePinKey('backspace')"><i class="fas fa-backspace"></i></button>
-                </div>
-                <div class="modal-footer" style="justify-content: center; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border-color);">
-                    <button type="button" class="cancel-btn" onclick="app.closePinModal()" style="width: 100%;">Cancel</button>
-                </div>
-            </div>
-        </div>
-
-        <!-- Change Admin PIN Modal -->
-        <div id="change-pin-modal" class="modal-overlay">
-            <div class="modal-content" style="max-width: 400px;">
-                <div class="modal-header">
-                    <h2>Change Admin PIN</h2>
-                    <button class="close-btn" onclick="app.closeChangePinModal()"><i class="fas fa-times"></i></button>
-                </div>
-                <form id="change-pin-form">
+                <form id="password-form" onsubmit="app.verifyPassword(event)">
                     <div class="form-group">
-                        <label for="current-pin">Current PIN</label>
-                        <input type="password" id="current-pin" required pattern="\d{4,8}" maxlength="8" placeholder="Enter current PIN">
-                    </div>
-                    <div class="form-group">
-                        <label for="new-pin">New PIN (4-8 digits)</label>
-                        <input type="password" id="new-pin" required pattern="\d{4,8}" maxlength="8" placeholder="Enter new PIN">
-                    </div>
-                    <div class="form-group">
-                        <label for="confirm-new-pin">Confirm New PIN</label>
-                        <input type="password" id="confirm-new-pin" required pattern="\d{4,8}" maxlength="8" placeholder="Re-enter new PIN">
+                        <label for="role-password" id="password-message">Enter password to login</label>
+                        <input type="password" id="role-password" required placeholder="Password">
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="cancel-btn" onclick="app.closeChangePinModal()">Cancel</button>
-                        <button type="submit" class="save-btn">Change PIN</button>
+                        <button type="button" class="cancel-btn" onclick="app.closePasswordModal()">Cancel</button>
+                        <button type="submit" class="save-btn">Login</button>
                     </div>
                 </form>
             </div>
