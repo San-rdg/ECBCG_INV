@@ -81,7 +81,7 @@ const app = (function() {
             inventory: state.inventory,
             sales: state.sales,
             contributors: state.contributors,
-            adminPin: state.adminPin
+            roles: state.roles
         }, { merge: true }).catch(err => console.error("Error syncing to Firebase: ", err));
     }
 
@@ -91,10 +91,21 @@ const app = (function() {
         sales: [],
         cart: [],
         contributors: [],
-        activeContributorId: '',
+        roles: [
+            { id: 'r1', name: 'President', isPrivileged: true, password: 'pres' },
+            { id: 'r2', name: 'Secretary', isPrivileged: true, password: 'sec' },
+            { id: 'r3', name: 'Production Manager', isPrivileged: true, password: 'prod' },
+            { id: 'r4', name: 'Finance', isPrivileged: false },
+            { id: 'r5', name: 'Sales and Marketing', isPrivileged: false },
+            { id: 'r6', name: 'HR', isPrivileged: false },
+            { id: 'r7', name: 'Assistant Production Managers', isPrivileged: false },
+            { id: 'r8', name: 'Treasurer', isPrivileged: false },
+            { id: 'r9', name: 'Vice Secretary', isPrivileged: false },
+            { id: 'r10', name: 'Vice President', isPrivileged: false }
+        ],
+        activeRoleId: '',
         activeLeaderboardTab: 'board',
         theme: 'light',
-        adminPin: '1234',
         isAdminUnlocked: false
     };
 
@@ -110,8 +121,8 @@ const app = (function() {
         const storedCart = localStorage.getItem('club_cart');
         
         const storedContributors = localStorage.getItem('club_contributors');
-        const storedActiveContributorId = localStorage.getItem('club_active_contributor_id');
-        const storedPin = localStorage.getItem('club_admin_pin');
+        const storedActiveRoleId = localStorage.getItem('club_active_role_id');
+        
 
         if (storedInventory) {
             state.inventory = JSON.parse(storedInventory);
@@ -131,11 +142,10 @@ const app = (function() {
             state.theme = storedTheme;
             document.documentElement.setAttribute('data-theme', state.theme);
         }
-        if (storedPin) {
+        /*
             state.adminPin = storedPin;
         } else {
-            state.adminPin = '1234';
-        }
+            */
         state.isAdminUnlocked = false; // Always start locked
         
         if (storedContributors) {
@@ -206,10 +216,15 @@ const app = (function() {
             ];
         }
 
-        if (storedActiveContributorId) {
-            state.activeContributorId = storedActiveContributorId;
-        } else if (state.contributors.length > 0) {
-            state.activeContributorId = state.contributors[0].id;
+        if (storedActiveRoleId) {
+            state.activeRoleId = storedActiveRoleId;
+            const role = state.roles.find(r => r.id === state.activeRoleId);
+            if (role && role.isPrivileged) {
+                // Do not auto-unlock admin on reload, require login again
+                state.isAdminUnlocked = false; 
+            } else {
+                state.isAdminUnlocked = false;
+            }
         }
     }
 
@@ -219,8 +234,8 @@ const app = (function() {
         localStorage.setItem('club_cart', JSON.stringify(state.cart));
         localStorage.setItem('club_theme', state.theme);
         localStorage.setItem('club_contributors', JSON.stringify(state.contributors));
-        localStorage.setItem('club_active_contributor_id', state.activeContributorId);
-        localStorage.setItem('club_admin_pin', state.adminPin);
+        localStorage.setItem('club_active_role_id', state.activeRoleId);
+        
 
         // Also sync global state to Firebase
         syncToFirebase();
@@ -352,10 +367,7 @@ const app = (function() {
             renderInventory(document.getElementById('inventory-search').value);
             showToast(`${item.name} stock updated.`);
 
-            // Award XP for Stock updates to the active volunteer
-            if (state.activeContributorId) {
-                awardXP(state.activeContributorId, 2 * Math.abs(amount), 'stock', Math.abs(amount));
-            }
+            
         }
     }
 
@@ -450,10 +462,7 @@ const app = (function() {
             state.inventory.push(newItem);
             showToast("Item added successfully.");
             
-            // Award XP for creating new Inventory items to active volunteer
-            if (state.activeContributorId) {
-                awardXP(state.activeContributorId, 15, 'inventory_add');
-            }
+            
         }
 
         saveState();
@@ -593,15 +602,11 @@ const app = (function() {
             date: new Date().toISOString(),
             items: state.cart.map(i => ({ name: i.name, qty: i.qty, price: i.price })),
             total: total,
-            contributorId: state.activeContributorId || null // link sale to contributor
+            roleId: state.activeRoleId || null // link sale to role
         };
         state.sales.unshift(sale); // Add to beginning
 
-        // Award XP to selected active contributor
-        if (state.activeContributorId) {
-            const xpEarned = Math.round(10 + total); // 10 XP flat base + 1 XP per $1 sold
-            awardXP(state.activeContributorId, xpEarned, 'sale_value', total);
-        }
+        
 
         saveState();
         state.cart = [];
@@ -808,47 +813,104 @@ const app = (function() {
         cont.badges = badges;
     }
 
-    // Active contributor selection setter
-    function setActiveContributor(id) {
-        state.activeContributorId = id;
-        saveState();
-        if (id) {
-            const cont = state.contributors.find(c => c.id === id);
-            showToast(`System active user set to: ${cont.name}`);
-        } else {
+    // Active Role selection setter
+    let pendingRoleId = null;
+
+    function setActiveRole(id) {
+        if (!id) {
+            state.activeRoleId = '';
+            state.isAdminUnlocked = false;
+            document.body.classList.remove('admin-active');
+            saveState();
             showToast("System active user: Guest Mode");
+            updateContributorHeaderSelector();
+            if (state.activeLeaderboardTab === 'manage') {
+                switchLeaderboardTab('board');
+            }
+            return;
         }
-        updateContributorHeaderSelector();
+
+        const role = state.roles.find(r => r.id === id);
+        if (role) {
+            if (role.isPrivileged) {
+                pendingRoleId = id;
+                showPasswordModal();
+            } else {
+                state.activeRoleId = id;
+                state.isAdminUnlocked = false;
+                document.body.classList.remove('admin-active');
+                saveState();
+                showToast(`Logged in as: ${role.name}`);
+                updateContributorHeaderSelector();
+                if (state.activeLeaderboardTab === 'manage') {
+                    switchLeaderboardTab('board');
+                }
+            }
+        }
+    }
+
+    function showPasswordModal() {
+        document.getElementById('password-form').reset();
+        document.getElementById('password-modal').classList.add('active');
+        document.getElementById('password-message').textContent = 'Enter password to login';
+        document.getElementById('password-message').classList.remove('error-text');
+    }
+
+    function closePasswordModal() {
+        document.getElementById('password-modal').classList.remove('active');
+        pendingRoleId = null;
+        updateContributorHeaderSelector(); // Revert selection if canceled
+    }
+
+    function verifyPassword(e) {
+        e.preventDefault();
+        const pwd = document.getElementById('role-password').value;
+        const role = state.roles.find(r => r.id === pendingRoleId);
+
+        if (role && role.password === pwd) {
+            state.activeRoleId = pendingRoleId;
+            state.isAdminUnlocked = true;
+            document.body.classList.add('admin-active');
+            saveState();
+            showToast(`Logged in as: ${role.name} (Admin Access Granted)`);
+            closePasswordModal();
+            updateContributorHeaderSelector();
+        } else {
+            document.getElementById('password-message').textContent = 'Incorrect Password';
+            document.getElementById('password-message').classList.add('error-text');
+            document.querySelector('#password-modal .modal-content').classList.add('shake');
+            setTimeout(() => {
+                document.querySelector('#password-modal .modal-content').classList.remove('shake');
+            }, 600);
+        }
     }
 
     // Update selectors in header and manual logger dropdowns
     function updateContributorHeaderSelector() {
-        const select = document.getElementById('active-contributor-select');
-        select.innerHTML = '<option value="">Guest User</option>';
+        const select = document.getElementById('active-role-select');
+        if (select) {
+            select.innerHTML = '<option value="">Guest User</option>';
+            state.roles.forEach(r => {
+                const opt = document.createElement('option');
+                opt.value = r.id;
+                opt.textContent = r.name;
+                if (r.id === state.activeRoleId) {
+                    opt.selected = true;
+                }
+                select.appendChild(opt);
+            });
+        }
         
         const manualSelect = document.getElementById('log-contributor-select');
-        if (manualSelect) manualSelect.innerHTML = '<option value="" disabled selected>-- Select Volunteer --</option>';
-
-        state.contributors.forEach(c => {
-            const info = calculateLevelInfo(c.xp);
-            
-            // Header selector
-            const opt = document.createElement('option');
-            opt.value = c.id;
-            opt.textContent = `${c.name} (Lvl ${info.level})`;
-            if (c.id === state.activeContributorId) {
-                opt.selected = true;
-            }
-            select.appendChild(opt);
-
-            // Log dropdown selector
-            if (manualSelect) {
+        if (manualSelect) {
+            manualSelect.innerHTML = '<option value="" disabled selected>-- Select Volunteer --</option>';
+            state.contributors.forEach(c => {
                 const optLog = document.createElement('option');
                 optLog.value = c.id;
                 optLog.textContent = c.name;
                 manualSelect.appendChild(optLog);
-            }
-        });
+            });
+        }
     }
 
     // Tab Switcher inside Leaderboard section
@@ -1078,10 +1140,7 @@ const app = (function() {
             checkAndAwardBadges(newCont);
             state.contributors.push(newCont);
             
-            // Set as active if none set
-            if (!state.activeContributorId) {
-                state.activeContributorId = newCont.id;
-            }
+
             
             showToast("New volunteer contributor added successfully!");
         }
@@ -1099,9 +1158,7 @@ const app = (function() {
         const c = state.contributors.find(x => x.id === id);
         if (c && confirm(`Are you sure you want to remove ${c.name}? This will clear all their accumulated XP!`)) {
             state.contributors = state.contributors.filter(x => x.id !== id);
-            if (state.activeContributorId === id) {
-                state.activeContributorId = state.contributors.length > 0 ? state.contributors[0].id : '';
-            }
+
             saveState();
             showToast("Contributor removed.");
             renderLeaderboardView();
@@ -1163,182 +1220,9 @@ const app = (function() {
     // SECURITY ACCESS & PASSCODE LOCK ENGINE
     // ==========================================================================
 
-    function updateLockUI() {
-        const lockBtn = document.getElementById('admin-lock-btn');
-        if (lockBtn) {
-            if (state.isAdminUnlocked) {
-                lockBtn.innerHTML = '<i class="fas fa-lock-open"></i>';
-                lockBtn.classList.add('unlocked');
-                lockBtn.title = 'Admin Mode Unlocked';
-            } else {
-                lockBtn.innerHTML = '<i class="fas fa-lock"></i>';
-                lockBtn.classList.remove('unlocked');
-                lockBtn.title = 'Admin Mode Locked';
-            }
-        }
-    }
-
-    function toggleAdminLock() {
-        if (state.isAdminUnlocked) {
-            state.isAdminUnlocked = false;
-            document.body.classList.remove('admin-active');
-            updateLockUI();
-            showToast('Admin session locked.');
-            
-            if (state.activeLeaderboardTab === 'manage') {
-                switchLeaderboardTab('board');
-            }
-        } else {
-            showPinPrompt();
-        }
-    }
-
+    
     function showPinPrompt(navTarget = null, actionCallback = null) {
-        pendingNavTarget = navTarget;
-        pendingAction = actionCallback;
-        enteredPin = '';
-        updatePinDots();
-        
-        const pinMsg = document.getElementById('pin-message');
-        if (pinMsg) {
-            pinMsg.textContent = 'Enter passcode to unlock admin actions';
-            pinMsg.classList.remove('error-text');
-        }
-        
-        const pinDots = document.getElementById('pin-dots');
-        if (pinDots) {
-            pinDots.classList.remove('error', 'success');
-        }
-        
-        document.getElementById('pin-modal').classList.add('active');
-    }
-
-    function closePinModal() {
-        document.getElementById('pin-modal').classList.remove('active');
-        enteredPin = '';
-        pendingNavTarget = null;
-        pendingAction = null;
-    }
-
-    function updatePinDots() {
-        const dots = document.querySelectorAll('#pin-dots .dot');
-        dots.forEach((dot, index) => {
-            if (index < enteredPin.length) {
-                dot.classList.add('active');
-            } else {
-                dot.classList.remove('active');
-            }
-        });
-    }
-
-    function handlePinKey(key) {
-        const pinDots = document.getElementById('pin-dots');
-        const pinMsg = document.getElementById('pin-message');
-        
-        if (pinDots && (pinDots.classList.contains('error') || pinDots.classList.contains('success'))) {
-            pinDots.classList.remove('error', 'success');
-            if (pinMsg) {
-                pinMsg.classList.remove('error-text');
-                pinMsg.textContent = 'Enter passcode to unlock admin actions';
-            }
-            enteredPin = '';
-            updatePinDots();
-        }
-
-        if (key === 'clear') {
-            enteredPin = '';
-            updatePinDots();
-        } else if (key === 'backspace') {
-            enteredPin = enteredPin.slice(0, -1);
-            updatePinDots();
-        } else if (/^\d$/.test(key)) {
-            if (enteredPin.length < 8) {
-                enteredPin += key;
-                updatePinDots();
-                
-                if (enteredPin.length === state.adminPin.length) {
-                    verifyPin();
-                }
-            }
-        }
-    }
-
-    function verifyPin() {
-        const pinDots = document.getElementById('pin-dots');
-        const pinMsg = document.getElementById('pin-message');
-        const pinModalOverlay = document.getElementById('pin-modal');
-        const modalContent = pinModalOverlay ? pinModalOverlay.querySelector('.modal-content') : null;
-
-        if (enteredPin === state.adminPin) {
-            state.isAdminUnlocked = true;
-            document.body.classList.add('admin-active');
-            updateLockUI();
-            if (pinDots) pinDots.classList.add('success');
-            if (pinMsg) pinMsg.textContent = 'Access Granted';
-            showToast('Admin access granted.');
-            
-            setTimeout(() => {
-                closePinModal();
-                if (pendingNavTarget) {
-                    navigate(pendingNavTarget);
-                } else if (pendingAction) {
-                    pendingAction();
-                }
-            }, 500);
-        } else {
-            if (pinDots) pinDots.classList.add('error');
-            if (modalContent) modalContent.classList.add('shake');
-            if (pinMsg) {
-                pinMsg.textContent = 'Incorrect PIN Code';
-                pinMsg.classList.add('error-text');
-            }
-            
-            setTimeout(() => {
-                if (modalContent) modalContent.classList.remove('shake');
-                enteredPin = '';
-                updatePinDots();
-            }, 600);
-        }
-    }
-
-    function showChangePinModal() {
-        if (!state.isAdminUnlocked) {
-            showPinPrompt(null, showChangePinModal);
-            return;
-        }
-        document.getElementById('change-pin-modal').classList.add('active');
-    }
-
-    function closeChangePinModal() {
-        document.getElementById('change-pin-modal').classList.remove('active');
-        document.getElementById('change-pin-form').reset();
-    }
-
-    function handleChangePinSubmit(e) {
-        e.preventDefault();
-        const currentPinVal = document.getElementById('current-pin').value;
-        const newPinVal = document.getElementById('new-pin').value;
-        const confirmPinVal = document.getElementById('confirm-new-pin').value;
-
-        if (currentPinVal !== state.adminPin) {
-            showToast('Current PIN is incorrect!');
-            return;
-        }
-
-        if (newPinVal.length < 4 || newPinVal.length > 8) {
-            showToast('New PIN must be between 4 and 8 digits!');
-            return;
-        }
-
-        if (newPinVal !== confirmPinVal) {
-            showToast('New PIN confirmations do not match!');
-            return;
-        }
-
-        state.adminPin = newPinVal;
-        saveState();
-        closeChangePinModal();
-        showToast('Admin PIN changed successfully.');
+        showToast("Admin access required. Please login as President, Secretary, or Production Manager.");
     }
 
     // Detailed Profile Display Modal
@@ -1497,28 +1381,13 @@ const app = (function() {
         if (logForm) logForm.addEventListener('submit', handleLogContributionSubmit);
 
         // Security Event Listeners
-        document.getElementById('admin-lock-btn').addEventListener('click', toggleAdminLock);
         
-        const changePinForm = document.getElementById('change-pin-form');
-        if (changePinForm) changePinForm.addEventListener('submit', handleChangePinSubmit);
+        
+        
 
-        // Physical Keyboard listener for PIN entry
-        document.addEventListener('keydown', (e) => {
-            const pinModal = document.getElementById('pin-modal');
-            if (pinModal && pinModal.classList.contains('active')) {
-                if (/^\d$/.test(e.key)) {
-                    handlePinKey(e.key);
-                } else if (e.key === 'Backspace') {
-                    handlePinKey('backspace');
-                } else if (e.key === 'Escape') {
-                    closePinModal();
-                } else if (e.key === 'c' || e.key === 'C') {
-                    handlePinKey('clear');
-                }
-            }
-        });
+        
 
-        updateLockUI();
+        
         document.body.classList.toggle('admin-active', state.isAdminUnlocked);
 
         // Start on dashboard and sync header active selector
@@ -1544,7 +1413,9 @@ const app = (function() {
         deleteSale,
         
         // Gamified details
-        setActiveContributor,
+        setActiveRole,
+        closePasswordModal,
+        verifyPassword,
         switchLeaderboardTab,
         showContributorModal,
         closeContributorModal,
@@ -1556,11 +1427,7 @@ const app = (function() {
         closeProfileDetailModal,
 
         // Security System
-        toggleAdminLock,
-        closePinModal,
-        handlePinKey,
-        showChangePinModal,
-        closeChangePinModal
+        
     };
 })();
 
