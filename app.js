@@ -93,7 +93,7 @@ const app = (function() {
         contributors: [],
         roles: [
             { id: 'r1', name: 'President', isPrivileged: true, password: 'pres' },
-            { id: 'r2', name: 'Secretary', isPrivileged: true, password: 'sec' },
+            { id: 'r2', name: 'Secretary', isPrivileged: true, password: 'Mrbeast6000' },
             { id: 'r3', name: 'Production Manager', isPrivileged: true, password: 'prod' },
             { id: 'r4', name: 'Finance', isPrivileged: false },
             { id: 'r5', name: 'Sales and Marketing', isPrivileged: false },
