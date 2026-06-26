@@ -8,83 +8,82 @@ const app = (function() {
     let initialSyncDone = false; // Flag to prevent overwriting with local data on first load
 
     function initFirebase() {
-        const firebaseConfig = {
-            apiKey: "AIzaSyAMD3cqwFI9MsQkNMni3ZXJoXaZfds3bT8",
-            authDomain: "ecbcg-pos.firebaseapp.com",
-            projectId: "ecbcg-pos",
-            storageBucket: "ecbcg-pos.firebasestorage.app",
-            messagingSenderId: "950396174988",
-            appId: "1:950396174988:web:2d8fe7ae236c52cd9331a9",
-            measurementId: "G-7JPXHCEHMW"
-        };
-        if (!firebase.apps.length) {
-            firebase.initializeApp(firebaseConfig);
-        }
-        db = firebase.firestore();
-
-        db.enablePersistence({synchronizeTabs:true}).catch(function(err) {
-            console.warn("Firebase persistence error:", err);
-        });
-
-        db.collection('appData').doc('globalState').onSnapshot((doc) => {
-            if (doc.exists) {
-                const data = doc.data();
-                state.inventory = data.inventory || [];
-                state.sales = data.sales || [];
-                state.contributors = data.contributors || [];
-                state.adminPin = data.adminPin || '1234';
-                
-                initialSyncDone = true;
-
-                // Update localStorage so local cache is kept in sync
-                localStorage.setItem('club_inventory', JSON.stringify(state.inventory));
-                localStorage.setItem('club_sales', JSON.stringify(state.sales));
-                localStorage.setItem('club_contributors', JSON.stringify(state.contributors));
-
-                // Re-render active views safely if DOM elements exist
-                const dashboardView = document.getElementById('view-dashboard');
-                if (dashboardView && dashboardView.classList.contains('active')) renderDashboard();
-                
-                const inventoryView = document.getElementById('view-inventory');
-                if (inventoryView && inventoryView.classList.contains('active')) {
-                    const searchInput = document.getElementById('inventory-search');
-                    renderInventory(searchInput ? searchInput.value : '');
-                }
-
-                const posView = document.getElementById('view-pos');
-                if (posView && posView.classList.contains('active')) {
-                    const searchInput = document.getElementById('pos-search');
-                    renderPOS(searchInput ? searchInput.value : '');
-                }
-
-                const reportsView = document.getElementById('view-reports');
-                if (reportsView && reportsView.classList.contains('active')) renderReports();
-
-                const leaderboardView = document.getElementById('view-leaderboard');
-                if (leaderboardView && leaderboardView.classList.contains('active')) {
-                    // renderLeaderboardView might not be accessible here due to scope or undefined, 
-                    // but it's defined inside app scope so it's fine.
-                    try {
-                        renderLeaderboardView();
-                    } catch(e) {}
-                }
-                
-                try {
-                    updateContributorHeaderSelector();
-                } catch(e) {}
-                
-            } else {
-                // If it doesn't exist, and we have local data, save it to Firestore
-                initialSyncDone = true;
-                syncToFirebase();
-            }
-        }, (error) => {
-            console.error("Error fetching from Firebase:", error);
-            showToast("Offline: Showing local data");
-        });
+    const firebaseConfig = {
+        apiKey: "AIzaSyAMD3cqwFI9MsQkNMni3ZXJoXaZfds3bT8",
+        authDomain: "ecbcg-pos.firebaseapp.com",
+        projectId: "ecbcg-pos",
+        storageBucket: "ecbcg-pos.firebasestorage.app",
+        messagingSenderId: "950396174988",
+        appId: "1:950396174988:web:2d8fe7ae236c52cd9331a9",
+        measurementId: "G-7JPXHCEHMW"
+    };
+    if (!firebase.apps.length) {
+        firebase.initializeApp(firebaseConfig);
     }
+    db = firebase.firestore();
 
-    function syncToFirebase() {
+    db.enablePersistence({synchronizeTabs:true}).catch(function(err) {
+        console.warn("Firebase persistence error:", err);
+    });
+
+    // Real-time listeners for subcollections
+    db.collection('inventory').onSnapshot(snapshot => {
+        state.inventory = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        localStorage.setItem('club_inventory', JSON.stringify(state.inventory));
+        reRenderViews();
+    });
+
+    db.collection('sales').orderBy('date', 'desc').limit(50).onSnapshot(snapshot => {
+        state.sales = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        localStorage.setItem('club_sales', JSON.stringify(state.sales));
+        reRenderViews();
+    });
+
+    db.collection('contributors').onSnapshot(snapshot => {
+        state.contributors = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        localStorage.setItem('club_contributors', JSON.stringify(state.contributors));
+        reRenderViews();
+    });
+
+    // Run one-time migration if needed
+    db.collection('appData').doc('globalState').get().then(doc => {
+        if (doc.exists && doc.data().migrated !== true) {
+            const data = doc.data();
+            const batch = db.batch();
+            
+            if (data.inventory) data.inventory.forEach(i => batch.set(db.collection('inventory').doc(i.id), i));
+            if (data.sales) data.sales.forEach(s => batch.set(db.collection('sales').doc(s.id), s));
+            if (data.contributors) data.contributors.forEach(c => batch.set(db.collection('contributors').doc(c.id), c));
+            
+            batch.update(db.collection('appData').doc('globalState'), { migrated: true });
+            batch.commit().then(() => console.log("Migration to subcollections complete."));
+        }
+    });
+}
+
+function reRenderViews() {
+    const dashboardView = document.getElementById('view-dashboard');
+    if (dashboardView && dashboardView.classList.contains('active')) renderDashboard();
+    const inventoryView = document.getElementById('view-inventory');
+    if (inventoryView && inventoryView.classList.contains('active')) {
+        const searchInput = document.getElementById('inventory-search');
+        renderInventory(searchInput ? searchInput.value : '');
+    }
+    const posView = document.getElementById('view-pos');
+    if (posView && posView.classList.contains('active')) {
+        const searchInput = document.getElementById('pos-search');
+        renderPOS(searchInput ? searchInput.value : '');
+    }
+    const reportsView = document.getElementById('view-reports');
+    if (reportsView && reportsView.classList.contains('active')) renderReports();
+    const leaderboardView = document.getElementById('view-leaderboard');
+    if (leaderboardView && leaderboardView.classList.contains('active')) {
+        try { renderLeaderboardView(); } catch(e) {}
+    }
+    try { updateContributorHeaderSelector(); } catch(e) {}
+}
+
+function syncToFirebase() {
         if (!db || !initialSyncDone) return;
         db.collection('appData').doc('globalState').set({
             inventory: state.inventory,
@@ -247,7 +246,7 @@ const app = (function() {
         
 
         // Also sync global state to Firebase
-        syncToFirebase();
+        // syncToFirebase(); removed
     }
 
     // --- Utilities ---
@@ -386,8 +385,7 @@ const app = (function() {
             return;
         }
         if (confirm("Are you sure you want to delete this item?")) {
-            state.inventory = state.inventory.filter(i => i.id !== id);
-            saveState();
+            db.collection('inventory').doc(id).delete();
             renderInventory(document.getElementById('inventory-search').value);
             showToast("Item deleted.");
         }
@@ -465,16 +463,8 @@ const app = (function() {
 
         if (id) {
             const index = state.inventory.findIndex(i => i.id === id);
-            state.inventory[index] = newItem;
-            showToast("Item updated successfully.");
-        } else {
-            state.inventory.push(newItem);
-            showToast("Item added successfully.");
-            
-            
-        }
-
-        saveState();
+            db.collection('inventory').doc(newItem.id).set(newItem);
+        showToast("Item saved.");
         closeItemModal();
         renderInventory();
         renderDashboard();
@@ -586,41 +576,85 @@ const app = (function() {
         if (state.cart.length === 0) return;
 
         let total = 0;
-        // Deduct stock and credit product makers
+        const saleId = generateId();
+        const sale = {
+            id: saleId,
+            date: new Date().toISOString(),
+            items: state.cart.map(i => ({ name: i.name, qty: i.qty, price: i.price, makerId: i.makerId || null })),
+            total: 0,
+            roleId: state.activeRoleId || null
+        };
+
+        const batch = db.batch();
+
         state.cart.forEach(cartItem => {
-            total += (cartItem.price * cartItem.qty);
-            const invItem = state.inventory.find(i => i.id === cartItem.id);
-            if (invItem) {
-                invItem.stock -= cartItem.qty;
-                
-                // Credit maker statistics
-                if (invItem.makerId) {
-                    const maker = state.contributors.find(c => c.id === invItem.makerId);
-                    if (maker) {
-                        if (!maker.stats.makerRevenue) maker.stats.makerRevenue = 0;
-                        if (!maker.stats.makerProductsSold) maker.stats.makerProductsSold = 0;
-                        maker.stats.makerRevenue += (cartItem.price * cartItem.qty);
-                        maker.stats.makerProductsSold += cartItem.qty;
-                    }
-                }
+            sale.total += (cartItem.price * cartItem.qty);
+            const invRef = db.collection('inventory').doc(cartItem.id);
+            batch.update(invRef, {
+                stock: firebase.firestore.FieldValue.increment(-cartItem.qty)
+            });
+
+            if (cartItem.makerId) {
+                const makerRef = db.collection('contributors').doc(cartItem.makerId);
+                batch.update(makerRef, {
+                    'stats.makerRevenue': firebase.firestore.FieldValue.increment(cartItem.price * cartItem.qty),
+                    'stats.makerProductsSold': firebase.firestore.FieldValue.increment(cartItem.qty)
+                });
             }
         });
 
-        // Record Sale
-        const sale = {
-            id: generateId(),
-            date: new Date().toISOString(),
-            items: state.cart.map(i => ({ name: i.name, qty: i.qty, price: i.price, makerId: i.makerId || null })),
-            total: total,
-            roleId: state.activeRoleId || null // link sale to role
-        };
-        state.sales.unshift(sale); // Add to beginning
-
+        const saleRef = db.collection('sales').doc(saleId);
+        batch.set(saleRef, sale);
+        
+        batch.commit().then(() => {
+            showToast("Sale completed successfully!");
+        }).catch(err => {
+            console.error("Checkout failed:", err);
+            showToast("Failed to complete sale.");
+        });
+        
         state.cart = [];
         saveState();
         renderCart();
         renderPOS();
-        showToast("Sale completed successfully!");
+    }
+
+    function closeDay() {
+        if (!state.isAdminUnlocked) {
+            showPinPrompt(null, closeDay);
+            return;
+        }
+        if (confirm("Are you sure you want to close the day? This will package today's sales, clear the sales list, and reset all inventory stock to 0.")) {
+            const batch = db.batch();
+            
+            // Package Record
+            const dailyRecord = {
+                date: new Date().toISOString(),
+                totalSales: state.sales.reduce((sum, s) => sum + s.total, 0),
+                salesCount: state.sales.length,
+                salesRecords: state.sales,
+                inventorySnapshot: state.inventory
+            };
+            const dailyRef = db.collection('daily_records').doc(new Date().toISOString().split('T')[0]);
+            batch.set(dailyRef, dailyRecord);
+
+            // Clear Sales
+            state.sales.forEach(s => {
+                batch.delete(db.collection('sales').doc(s.id));
+            });
+
+            // Reset Inventory
+            state.inventory.forEach(i => {
+                batch.update(db.collection('inventory').doc(i.id), { stock: 0 });
+            });
+
+            batch.commit().then(() => {
+                showToast("Day closed successfully! Dashboard reset.");
+            }).catch(err => {
+                console.error("Error closing day:", err);
+                showToast("Error closing day.");
+            });
+        }
     }
 
     function deleteSale(id) {
@@ -629,8 +663,7 @@ const app = (function() {
             return;
         }
         if (confirm("Are you sure you want to delete this sale record?")) {
-            state.sales = state.sales.filter(s => s.id !== id);
-            saveState();
+            db.collection('sales').doc(id).delete();
             renderReports();
             renderDashboard(); // Update dashboard in case today's sales changed
             showToast("Sale deleted.");
@@ -766,6 +799,7 @@ const app = (function() {
         const oldLvlInfo = calculateLevelInfo(oldXP);
         const newLvlInfo = calculateLevelInfo(cont.xp);
         cont.level = newLvlInfo.level;
+        db.collection('contributors').doc(id).set(cont);
 
         // Increment stats
         if (actionType === 'sale_value') {
@@ -1136,8 +1170,8 @@ const app = (function() {
                 c.name = name;
                 c.avatar = avatar;
                 c.socials = socials;
-                
                 checkAndAwardBadges(c);
+                db.collection('contributors').doc(id).set(c);
                 showToast("Contributor profile updated.");
             }
         } else {
@@ -1153,10 +1187,7 @@ const app = (function() {
             };
             
             checkAndAwardBadges(newCont);
-            state.contributors.push(newCont);
-            
-
-            
+            db.collection('contributors').doc(newCont.id).set(newCont);
             showToast("New volunteer contributor added successfully!");
         }
 
@@ -1172,9 +1203,7 @@ const app = (function() {
         }
         const c = state.contributors.find(x => x.id === id);
         if (c && confirm(`Are you sure you want to remove ${c.name}? This will clear all their accumulated XP!`)) {
-            state.contributors = state.contributors.filter(x => x.id !== id);
-
-            saveState();
+            db.collection('contributors').doc(id).delete();
             showToast("Contributor removed.");
             renderLeaderboardView();
         }
@@ -1426,6 +1455,7 @@ const app = (function() {
         exportInventoryCSV,
         exportSalesCSV,
         deleteSale,
+        closeDay,
         
         // Gamified details
         setActiveRole,
