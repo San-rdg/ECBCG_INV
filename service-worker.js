@@ -1,4 +1,4 @@
-const CACHE_NAME = 'club-pos-v3';
+const CACHE_NAME = 'club-pos-v4';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
@@ -36,12 +36,13 @@ self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
   
   event.respondWith(
-    caches.match(event.request)
-      .then(response => {
-        if (response) {
-          return response; // Return cached version
-        }
-        return fetch(event.request); // Fallback to network
-      })
+    fetch(event.request).then(response => {
+      return caches.open(CACHE_NAME).then(cache => {
+        cache.put(event.request, response.clone());
+        return response;
+      });
+    }).catch(() => {
+      return caches.match(event.request);
+    })
   );
 });
