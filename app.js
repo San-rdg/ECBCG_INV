@@ -32,6 +32,11 @@ const app = (function() {
                 
                 initialSyncDone = true;
 
+                // Update localStorage so local cache is kept in sync
+                localStorage.setItem('club_inventory', JSON.stringify(state.inventory));
+                localStorage.setItem('club_sales', JSON.stringify(state.sales));
+                localStorage.setItem('club_contributors', JSON.stringify(state.contributors));
+
                 // Re-render active views safely if DOM elements exist
                 const dashboardView = document.getElementById('view-dashboard');
                 if (dashboardView && dashboardView.classList.contains('active')) renderDashboard();
@@ -66,8 +71,8 @@ const app = (function() {
                 
             } else {
                 // If it doesn't exist, and we have local data, save it to Firestore
-                syncToFirebase();
                 initialSyncDone = true;
+                syncToFirebase();
             }
         }, (error) => {
             console.error("Error fetching from Firebase:", error);
@@ -76,7 +81,7 @@ const app = (function() {
     }
 
     function syncToFirebase() {
-        if (!db) return;
+        if (!db || !initialSyncDone) return;
         db.collection('appData').doc('globalState').set({
             inventory: state.inventory,
             sales: state.sales,
@@ -93,7 +98,7 @@ const app = (function() {
         contributors: [],
         roles: [
             { id: 'r1', name: 'President', isPrivileged: true, password: 'pres' },
-            { id: 'r2', name: 'Secretary', isPrivileged: true, password: 'Mrbeast6000' },
+            { id: 'r2', name: 'Secretary', isPrivileged: true, password: 'sec' },
             { id: 'r3', name: 'Production Manager', isPrivileged: true, password: 'prod' },
             { id: 'r4', name: 'Finance', isPrivileged: false },
             { id: 'r5', name: 'Sales and Marketing', isPrivileged: false },
