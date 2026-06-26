@@ -588,7 +588,19 @@ function syncToFirebase() {
         };
 
         const batch = db.batch();
+        const contributorUpdates = {};
 
+        function getUpdatedContributor(contributorId) {
+            if (!contributorUpdates[contributorId]) {
+                const cont = state.contributors.find(c => c.id === contributorId);
+                if (cont) {
+                    contributorUpdates[contributorId] = JSON.parse(JSON.stringify(cont));
+                }
+            }
+            return contributorUpdates[contributorId];
+        }
+
+        // Deduct stock and accumulate maker (producer) stats/XP
         state.cart.forEach(cartItem => {
             sale.total += (cartItem.price * cartItem.qty);
             const invRef = db.collection('inventory').doc(cartItem.id);
@@ -597,13 +609,39 @@ function syncToFirebase() {
             });
 
             if (cartItem.makerId) {
-                const makerRef = db.collection('contributors').doc(cartItem.makerId);
-                batch.update(makerRef, {
-                    'stats.makerRevenue': firebase.firestore.FieldValue.increment(cartItem.price * cartItem.qty),
-                    'stats.makerProductsSold': firebase.firestore.FieldValue.increment(cartItem.qty)
-                });
+                const maker = getUpdatedContributor(cartItem.makerId);
+                if (maker) {
+                    if (!maker.stats) {
+                        maker.stats = { totalSalesVolume: 0, totalSalesCount: 0, totalStockAdjustments: 0, manualContributionsCount: 0, makerRevenue: 0, makerProductsSold: 0 };
+                    }
+                    maker.stats.makerRevenue = (maker.stats.makerRevenue || 0) + (cartItem.price * cartItem.qty);
+                    maker.stats.makerProductsSold = (maker.stats.makerProductsSold || 0) + cartItem.qty;
+                    maker.xp = (maker.xp || 0) + (50 * cartItem.qty); // +50 XP per item sold
+                }
             }
         });
+
+        // Accumulate seller (salesperson) stats/XP
+        if (state.activeRoleId) {
+            const seller = getUpdatedContributor(state.activeRoleId);
+            if (seller) {
+                if (!seller.stats) {
+                    seller.stats = { totalSalesVolume: 0, totalSalesCount: 0, totalStockAdjustments: 0, manualContributionsCount: 0, makerRevenue: 0, makerProductsSold: 0 };
+                }
+                seller.stats.totalSalesVolume = (seller.stats.totalSalesVolume || 0) + sale.total;
+                seller.stats.totalSalesCount = (seller.stats.totalSalesCount || 0) + 1;
+                seller.xp = (seller.xp || 0) + 50; // +50 XP per checkout
+            }
+        }
+
+        // Recalculate level, check/award badges, and add to batch
+        for (const contId in contributorUpdates) {
+            const cont = contributorUpdates[contId];
+            const levelInfo = calculateLevelInfo(cont.xp || 0);
+            cont.level = levelInfo.level;
+            checkAndAwardBadges(cont);
+            batch.set(db.collection('contributors').doc(contId), cont);
+        }
 
         const saleRef = db.collection('sales').doc(saleId);
         batch.set(saleRef, sale);
@@ -673,15 +711,25 @@ function syncToFirebase() {
             state.sales.forEach(sale => {
                 const div = document.createElement('div');
                 div.className = 'sale-record';
+                
+                // Determine Salesperson name
+                const role = state.roles.find(r => r.id === sale.roleId);
+                const contributor = state.contributors.find(c => c.id === sale.roleId);
+                const sellerName = contributor ? contributor.name : (role ? role.name : 'Guest User');
+
                 let itemsHtml = sale.items.map(i => {
                     const maker = state.contributors.find(c => c.id === i.makerId);
                     const makerName = maker ? maker.name : 'Unknown Maker';
-                    return `<div>${i.qty}x ${i.name} (by ${makerName})</div>`;
+                    return `<div>${i.qty}x ${i.name} (Producer: ${makerName})</div>`;
                 }).join('');
+                
                 div.innerHTML = `
                     <div>
                         <strong>${new Date(sale.date).toLocaleString()}</strong>
-                        <div style="color:var(--text-secondary); font-size: 0.85rem; margin-top:0.25rem;">${itemsHtml}</div>
+                        <div style="color:var(--text-secondary); font-size: 0.85rem; margin-top:0.25rem;">
+                            <div><strong>Salesperson:</strong> ${sellerName}</div>
+                            <div style="margin-top: 0.25rem; padding-left: 0.5rem; border-left: 2px solid var(--border-color);">${itemsHtml}</div>
+                        </div>
                     </div>
                     <div style="text-align: right;">
                         <div class="price">${formatCurrency(sale.total)}</div>
@@ -754,13 +802,19 @@ function syncToFirebase() {
             showToast("No active sales to export.");
             return;
         }
-        let csvContent = "ID,Date,Total,Items,Role\n";
+        let csvContent = "ID,Date,Total,Items,Salesperson\n";
         state.sales.forEach(s => {
             const role = state.roles.find(r => r.id === s.roleId);
-            const roleName = role ? role.name : 'Unknown';
-            const itemsStr = s.items.map(i => `${i.qty}x ${i.name}`).join('; ');
+            const contributor = state.contributors.find(c => c.id === s.roleId);
+            const sellerName = contributor ? contributor.name : (role ? role.name : 'Guest User');
+            
+            const itemsStr = s.items.map(i => {
+                const maker = state.contributors.find(c => c.id === i.makerId);
+                const makerName = maker ? maker.name : 'Unknown Maker';
+                return `${i.qty}x ${i.name} (Producer: ${makerName})`;
+            }).join('; ');
             const escapedItemsStr = itemsStr.replace(/"/g, '""');
-            csvContent += `${s.id},${s.date},${s.total},"${escapedItemsStr}",${roleName}\n`;
+            csvContent += `${s.id},${s.date},${s.total},"${escapedItemsStr}","${sellerName}"\n`;
         });
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
@@ -784,13 +838,19 @@ function syncToFirebase() {
             showToast("No sales in this daily record.");
             return;
         }
-        let csvContent = "ID,Date,Total,Items,Role\n";
+        let csvContent = "ID,Date,Total,Items,Salesperson\n";
         sales.forEach(s => {
             const role = state.roles.find(r => r.id === s.roleId);
-            const roleName = role ? role.name : 'Unknown';
-            const itemsStr = s.items.map(i => `${i.qty}x ${i.name}`).join('; ');
+            const contributor = state.contributors.find(c => c.id === s.roleId);
+            const sellerName = contributor ? contributor.name : (role ? role.name : 'Guest User');
+            
+            const itemsStr = s.items.map(i => {
+                const maker = state.contributors.find(c => c.id === i.makerId);
+                const makerName = maker ? maker.name : 'Unknown Maker';
+                return `${i.qty}x ${i.name} (Producer: ${makerName})`;
+            }).join('; ');
             const escapedItemsStr = itemsStr.replace(/"/g, '""');
-            csvContent += `${s.id},${s.date},${s.total},"${escapedItemsStr}",${roleName}\n`;
+            csvContent += `${s.id},${s.date},${s.total},"${escapedItemsStr}","${sellerName}"\n`;
         });
         const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
         const url = URL.createObjectURL(blob);
@@ -804,7 +864,123 @@ function syncToFirebase() {
     }
 
     function renderLeaderboardView() {
-        // Implement as dummy for now or basic rendering to fix syntax
+        const podiumContainer = document.getElementById('leaderboard-podium');
+        const listContainer = document.getElementById('leaderboard-list');
+        const manageGrid = document.getElementById('contributors-manage-grid');
+        
+        if (!podiumContainer || !listContainer || !manageGrid) return;
+        
+        // Sort contributors by XP descending
+        const sorted = [...state.contributors].sort((a, b) => (b.xp || 0) - (a.xp || 0));
+        
+        // 1. Render Podium (Top 3)
+        podiumContainer.innerHTML = '';
+        const top3 = sorted.slice(0, 3);
+        
+        // Order for podium: 2nd place (left), 1st place (middle), 3rd place (right)
+        // Since CSS uses flexbox orders (.first { order: 2; }, .second { order: 1; }, .third { order: 3; }),
+        // we can just append them.
+        const places = ['first', 'second', 'third'];
+        
+        top3.forEach((c, index) => {
+            const placeClass = places[index]; // 'first', 'second', 'third'
+            const rank = index + 1;
+            const initials = getInitials(c.name);
+            const isFirst = placeClass === 'first';
+            
+            const col = document.createElement('div');
+            col.className = `podium-column ${placeClass}`;
+            col.innerHTML = `
+                <div class="podium-avatar-wrapper" onclick="app.showProfileDetail('${c.id}')" style="cursor: pointer;">
+                    ${isFirst ? '<div class="podium-crown"><i class="fas fa-crown"></i></div>' : ''}
+                    <div class="avatar-circle avatar-${c.avatar}">${initials}</div>
+                    <div class="podium-rank-badge">${rank}</div>
+                </div>
+                <div class="podium-name">${c.name}</div>
+                <div class="podium-xp">${c.xp || 0} XP</div>
+                <div class="podium-block">${rank}</div>
+            `;
+            podiumContainer.appendChild(col);
+        });
+        
+        // 2. Render Ranked List (4th place onwards)
+        listContainer.innerHTML = '';
+        const rest = sorted.slice(3);
+        if (rest.length === 0) {
+            listContainer.innerHTML = '<p style="text-align:center; color:var(--text-secondary); padding: 1rem 0;">No other contributors yet.</p>';
+        } else {
+            rest.forEach((c, index) => {
+                const rank = index + 4;
+                const initials = getInitials(c.name);
+                const levelInfo = calculateLevelInfo(c.xp || 0);
+                
+                const item = document.createElement('div');
+                item.className = 'leaderboard-item';
+                item.onclick = () => app.showProfileDetail(c.id);
+                item.innerHTML = `
+                    <div class="leaderboard-rank">${rank}</div>
+                    <div class="avatar-circle avatar-${c.avatar}">${initials}</div>
+                    <div class="leaderboard-info">
+                        <div class="leaderboard-name-row">
+                            <span class="leaderboard-name">${c.name}</span>
+                            <span class="level-badge">LVL ${levelInfo.level}</span>
+                        </div>
+                        <div class="xp-bar-container">
+                            <div class="xp-bar-fill" style="width: ${levelInfo.progress}%"></div>
+                        </div>
+                        <div class="social-plugins">
+                            ${c.socials?.twitter ? `<a href="${c.socials.twitter}" target="_blank" class="social-btn twitter" onclick="event.stopPropagation()"><i class="fab fa-twitter"></i></a>` : ''}
+                            ${c.socials?.github ? `<a href="${c.socials.github}" target="_blank" class="social-btn github" onclick="event.stopPropagation()"><i class="fab fa-github"></i></a>` : ''}
+                            ${c.socials?.linkedin ? `<a href="${c.socials.linkedin}" target="_blank" class="social-btn linkedin" onclick="event.stopPropagation()"><i class="fab fa-linkedin"></i></a>` : ''}
+                            ${c.socials?.instagram ? `<a href="${c.socials.instagram}" target="_blank" class="social-btn instagram" onclick="event.stopPropagation()"><i class="fab fa-instagram"></i></a>` : ''}
+                        </div>
+                    </div>
+                    <div class="leaderboard-xp-display">
+                        <span class="leaderboard-xp-number">${c.xp || 0}</span>
+                        <span class="leaderboard-xp-label">XP</span>
+                    </div>
+                `;
+                listContainer.appendChild(item);
+            });
+        }
+        
+        // 3. Render Manage Contributors Grid
+        manageGrid.innerHTML = '';
+        state.contributors.forEach(c => {
+            const initials = getInitials(c.name);
+            const levelInfo = calculateLevelInfo(c.xp || 0);
+            
+            const card = document.createElement('div');
+            card.className = 'contributor-card';
+            card.innerHTML = `
+                <div class="avatar-circle avatar-${c.avatar}" onclick="app.showProfileDetail('${c.id}')" style="cursor: pointer;">${initials}</div>
+                <h4>${c.name}</h4>
+                <div class="contributor-card-stats">
+                    LVL ${levelInfo.level} • ${c.xp || 0} XP
+                </div>
+                <div class="contributor-card-actions">
+                    <button class="outline-btn" onclick="app.editContributor('${c.id}')" style="margin: 0; padding: 0.3rem 0.5rem; font-size: 0.75rem; width: auto;">
+                        <i class="fas fa-edit"></i> Edit
+                    </button>
+                    <button class="outline-btn danger-btn" onclick="app.deleteContributor('${c.id}')" style="margin: 0; padding: 0.3rem 0.5rem; font-size: 0.75rem; border: none; width: auto;">
+                        <i class="fas fa-trash"></i> Delete
+                    </button>
+                </div>
+            `;
+            manageGrid.appendChild(card);
+        });
+        
+        // Also populate the volunteer dropdown in the Log Contribution modal
+        const logSelect = document.getElementById('log-contributor-select');
+        if (logSelect) {
+            logSelect.innerHTML = '<option value="" disabled selected>-- Select Volunteer --</option>';
+            state.contributors.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c.id;
+                opt.textContent = c.name;
+                logSelect.appendChild(opt);
+            });
+        }
     }
     
     function switchLeaderboardTab(tab) {
@@ -823,11 +999,138 @@ function syncToFirebase() {
         if (!state.isAdminUnlocked) { showPinPrompt(null, showContributorModal); return; }
         document.getElementById('contributor-form').reset();
         document.getElementById('contributor-id').value = '';
+        const modalTitle = document.getElementById('contributor-modal-title');
+        if (modalTitle) modalTitle.textContent = "Add Contributor";
         document.getElementById('contributor-modal').classList.add('active');
     }
 
     function closeContributorModal() {
         document.getElementById('contributor-modal').classList.remove('active');
+    }
+
+    function editContributor(id) {
+        if (!state.isAdminUnlocked) {
+            showPinPrompt(null, () => editContributor(id));
+            return;
+        }
+        const c = state.contributors.find(x => x.id === id);
+        if (c) {
+            document.getElementById('contributor-id').value = c.id;
+            document.getElementById('contributor-name').value = c.name;
+            document.getElementById('contributor-avatar').value = c.avatar || "indigo";
+            document.getElementById('social-twitter').value = c.socials?.twitter || "";
+            document.getElementById('social-github').value = c.socials?.github || "";
+            document.getElementById('social-linkedin').value = c.socials?.linkedin || "";
+            document.getElementById('social-instagram').value = c.socials?.instagram || "";
+            const modalTitle = document.getElementById('contributor-modal-title');
+            if (modalTitle) modalTitle.textContent = "Edit Contributor";
+            document.getElementById('contributor-modal').classList.add('active');
+        }
+    }
+
+    function deleteContributor(id) {
+        if (!state.isAdminUnlocked) {
+            showPinPrompt(null, () => deleteContributor(id));
+            return;
+        }
+        const c = state.contributors.find(x => x.id === id);
+        if (c && confirm(`Are you sure you want to remove ${c.name}? This will clear all their accumulated XP!`)) {
+            db.collection('contributors').doc(id).delete().then(() => {
+                showToast("Contributor removed.");
+                renderLeaderboardView();
+            }).catch(err => {
+                console.error("Error removing contributor:", err);
+                showToast("Failed to remove contributor.");
+            });
+        }
+    }
+
+    function showProfileDetail(id) {
+        const c = state.contributors.find(x => x.id === id);
+        if (!c) return;
+        
+        const levelInfo = calculateLevelInfo(c.xp || 0);
+        const initials = getInitials(c.name);
+        
+        const allBadges = [
+            { id: 'sales_rookie', name: 'First Milestone', icon: 'fas fa-baby-carriage', desc: 'Completed first checkout or logged activity', class: 'badge-rookie' },
+            { id: 'sales_guru', name: 'Sales Champ', icon: 'fas fa-sack-dollar', desc: 'Managed $200+ sales volume checkouts', class: 'badge-sales-guru' },
+            { id: 'stock_master', name: 'Stock Master', icon: 'fas fa-boxes', desc: 'Adjusted stock items in inventory', class: 'badge-stock-master' },
+            { id: 'socialite', name: 'Socialite', icon: 'fas fa-share-nodes', desc: 'Connected multiple social profiles', class: 'badge-socialite' },
+            { id: 'legendary', name: 'Legendary', icon: 'fas fa-crown', desc: 'Reached 1000+ XP', class: 'badge-legendary' }
+        ];
+        
+        const badgeListHtml = allBadges.map(badge => {
+            const hasBadge = c.badges && c.badges.includes(badge.id);
+            if (hasBadge) {
+                return `
+                    <div class="badge-pill ${badge.class}" title="${badge.desc}">
+                        <i class="${badge.icon}"></i>
+                        <span>${badge.name}</span>
+                    </div>
+                `;
+            } else {
+                return `
+                    <div class="badge-pill locked" title="${badge.desc} (Locked)">
+                        <i class="fas fa-lock"></i>
+                        <span>${badge.name}</span>
+                    </div>
+                `;
+            }
+        }).join('');
+        
+        const body = document.getElementById('profile-detail-body');
+        if (body) {
+            body.innerHTML = `
+                <div class="profile-details-header">
+                    <div class="avatar-circle avatar-${c.avatar}">${initials}</div>
+                    <h3>${c.name}</h3>
+                    <span class="level-label">Level ${levelInfo.level}</span>
+                    <div class="social-plugins" style="justify-content: center; margin-top: 0.5rem;">
+                        ${c.socials?.twitter ? `<a href="${c.socials.twitter}" target="_blank" class="social-btn twitter"><i class="fab fa-twitter"></i></a>` : ''}
+                        ${c.socials?.github ? `<a href="${c.socials.github}" target="_blank" class="social-btn github"><i class="fab fa-github"></i></a>` : ''}
+                        ${c.socials?.linkedin ? `<a href="${c.socials.linkedin}" target="_blank" class="social-btn linkedin"><i class="fab fa-linkedin"></i></a>` : ''}
+                        ${c.socials?.instagram ? `<a href="${c.socials.instagram}" target="_blank" class="social-btn instagram"><i class="fab fa-instagram"></i></a>` : ''}
+                    </div>
+                </div>
+                
+                <div class="profile-stats-grid">
+                    <div class="profile-stat-box">
+                        <div class="profile-stat-val">${c.xp || 0}</div>
+                        <div class="profile-stat-lbl">Total XP</div>
+                    </div>
+                    <div class="profile-stat-box">
+                        <div class="profile-stat-val">${c.stats?.makerProductsSold || 0}</div>
+                        <div class="profile-stat-lbl">Products Sold</div>
+                    </div>
+                    <div class="profile-stat-box">
+                        <div class="profile-stat-val">${formatCurrency(c.stats?.makerRevenue || 0)}</div>
+                        <div class="profile-stat-lbl">Revenue Generated</div>
+                    </div>
+                    <div class="profile-stat-box">
+                        <div class="profile-stat-val">${c.stats?.manualContributionsCount || 0}</div>
+                        <div class="profile-stat-lbl">Logged Activities</div>
+                    </div>
+                    <div class="profile-stat-box" style="grid-column: span 2;">
+                        <div class="profile-stat-val">${c.stats?.totalStockAdjustments || 0}</div>
+                        <div class="profile-stat-lbl">Total Stock Adjustments</div>
+                    </div>
+                </div>
+                
+                <div class="profile-badges-section">
+                    <h4>Badges & Milestones</h4>
+                    <div class="badges-container">
+                        ${badgeListHtml}
+                    </div>
+                </div>
+            `;
+        }
+        
+        document.getElementById('profile-detail-modal').classList.add('active');
+    }
+    
+    function closeProfileDetailModal() {
+        document.getElementById('profile-detail-modal').classList.remove('active');
     }
 
     function handleContributorSubmit(e) {
@@ -875,12 +1178,109 @@ function syncToFirebase() {
         renderLeaderboardView();
     }
 
-    function checkAndAwardBadges(cont) {}
-    function calculateLevelInfo(xp) { return { level: 1, progress: 0, nextXp: 100 }; }
-    function getInitials(name) { return name.substring(0, 2).toUpperCase(); }
-    
-    function showLogContributionModal() {
+    function checkAndAwardBadges(cont) {
+        if (!cont.badges) cont.badges = [];
+        if (!cont.stats) {
+            cont.stats = { totalSalesVolume: 0, totalSalesCount: 0, totalStockAdjustments: 0, manualContributionsCount: 0, makerRevenue: 0, makerProductsSold: 0 };
+        }
+        
+        const newBadges = new Set(cont.badges);
+        
+        // 1. sales_rookie
+        if ((cont.stats.totalSalesCount || 0) > 0 || (cont.stats.manualContributionsCount || 0) > 0 || (cont.stats.makerProductsSold || 0) > 0) {
+            newBadges.add('sales_rookie');
+        }
+        
+        // 2. sales_guru
+        if ((cont.stats.totalSalesVolume || 0) >= 200 || (cont.stats.makerRevenue || 0) >= 200) {
+            newBadges.add('sales_guru');
+        }
+        
+        // 3. stock_master
+        if ((cont.stats.totalStockAdjustments || 0) > 0) {
+            newBadges.add('stock_master');
+        }
+        
+        // 4. socialite
+        let socialCount = 0;
+        if (cont.socials) {
+            if (cont.socials.twitter) socialCount++;
+            if (cont.socials.github) socialCount++;
+            if (cont.socials.linkedin) socialCount++;
+            if (cont.socials.instagram) socialCount++;
+        }
+        if (socialCount >= 2) {
+            newBadges.add('socialite');
+        }
+        
+        // 5. legendary
+        if (cont.xp >= 1000) {
+            newBadges.add('legendary');
+        }
+        
+        cont.badges = Array.from(newBadges);
+    }
+
+    function calculateLevelInfo(xp) {
+        let level = 1;
+        let xpForNextLevel = 100;
+        let xpInCurrentLevel = xp;
+        
+        const levels = [
+            { level: 1, minXp: 0, maxXp: 200 },
+            { level: 2, minXp: 200, maxXp: 400 },
+            { level: 3, minXp: 400, maxXp: 700 },
+            { level: 4, minXp: 700, maxXp: 1100 },
+            { level: 5, minXp: 1100, maxXp: 1600 }
+        ];
+        
+        for (let i = 0; i < levels.length; i++) {
+            const lvl = levels[i];
+            if (xp >= lvl.minXp) {
+                level = lvl.level;
+                const range = lvl.maxXp - lvl.minXp;
+                xpInCurrentLevel = xp - lvl.minXp;
+                xpForNextLevel = range;
+            }
+        }
+        
+        // If past the defined levels, increment dynamically
+        if (xp >= 1600) {
+            level = 5 + Math.floor((xp - 1600) / 600);
+            const baseOfLevel = 1600 + (level - 5) * 600;
+            xpInCurrentLevel = xp - baseOfLevel;
+            xpForNextLevel = 600;
+        }
+        
+        const progress = Math.min(100, Math.max(0, (xpInCurrentLevel / xpForNextLevel) * 100));
+        return { level, progress, nextXp: xpForNextLevel };
+    }
+
+    function getInitials(name) {
+        if (!name) return "";
+        const parts = name.split(' ');
+        if (parts.length > 1) {
+            return (parts[0][0] + parts[1][0]).toUpperCase();
+        }
+        return name.substring(0, 2).toUpperCase();
+    }
+      function showLogContributionModal() {
         if (!state.isAdminUnlocked) { showPinPrompt(null, showLogContributionModal); return; }
+        document.getElementById('log-contribution-form').reset();
+        document.getElementById('custom-xp-group').style.display = 'none';
+        document.getElementById('log-custom-xp').required = false;
+        
+        // Populate the dropdown in case new volunteers were added
+        const logSelect = document.getElementById('log-contributor-select');
+        if (logSelect) {
+            logSelect.innerHTML = '<option value="" disabled selected>-- Select Volunteer --</option>';
+            state.contributors.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = c.id;
+                opt.textContent = c.name;
+                logSelect.appendChild(opt);
+            });
+        }
         document.getElementById('log-contribution-modal').classList.add('active');
     }
     
@@ -890,9 +1290,55 @@ function syncToFirebase() {
     
     function handleLogContributionSubmit(e) {
         e.preventDefault();
+        const contributorId = document.getElementById('log-contributor-select').value;
+        const activityVal = document.getElementById('log-activity-select').value;
+        
+        let xpAmount = 0;
+        if (activityVal === 'other') {
+            xpAmount = parseInt(document.getElementById('log-custom-xp').value) || 0;
+        } else {
+            const selectEl = document.getElementById('log-activity-select');
+            const selectedOpt = selectEl.options[selectEl.selectedIndex];
+            xpAmount = parseInt(selectedOpt.getAttribute('data-xp')) || 0;
+        }
+        
+        const cont = state.contributors.find(c => c.id === contributorId);
+        if (cont) {
+            cont.xp = (cont.xp || 0) + xpAmount;
+            if (!cont.stats) {
+                cont.stats = { totalSalesVolume: 0, totalSalesCount: 0, totalStockAdjustments: 0, manualContributionsCount: 0, makerRevenue: 0, makerProductsSold: 0 };
+            }
+            cont.stats.manualContributionsCount = (cont.stats.manualContributionsCount || 0) + 1;
+            
+            const levelInfo = calculateLevelInfo(cont.xp);
+            cont.level = levelInfo.level;
+            checkAndAwardBadges(cont);
+            
+            db.collection('contributors').doc(contributorId).set(cont).then(() => {
+                showToast(`Successfully logged activity! Awarded ${xpAmount} XP to ${cont.name}.`);
+                closeLogContributionModal();
+                renderLeaderboardView();
+            }).catch(err => {
+                console.error("Error logging activity:", err);
+                showToast("Failed to log activity.");
+            });
+        }
     }
     
-    function updateManualXPPrediction(val) {}
+    function updateManualXPPrediction(val) {
+        const customXpGroup = document.getElementById('custom-xp-group');
+        const customXpInput = document.getElementById('log-custom-xp');
+        if (customXpGroup && customXpInput) {
+            if (val === 'other') {
+                customXpGroup.style.display = 'block';
+                customXpInput.required = true;
+            } else {
+                customXpGroup.style.display = 'none';
+                customXpInput.required = false;
+                customXpInput.value = '';
+            }
+        }
+    }
     
     function showPinPrompt(navTarget = null, actionCallback = null) {
         pendingNavTarget = navTarget;
@@ -987,21 +1433,37 @@ function syncToFirebase() {
             showToast("Logged out to Guest User");
             return;
         }
+
+        // Check if it's a role
         const role = state.roles.find(r => r.id === val);
-        if (!role) return;
-        if (role.isPrivileged) {
-            if (state.activeRoleId === val && state.isAdminUnlocked) {
-                return;
+        if (role) {
+            if (role.isPrivileged) {
+                if (state.activeRoleId === val && state.isAdminUnlocked) {
+                    return;
+                }
+                showPinPrompt(null, () => {});
+            } else {
+                state.activeRoleId = val;
+                state.isAdminUnlocked = false;
+                saveState();
+                document.body.classList.toggle('admin-active', false);
+                reRenderViews();
+                updateContributorHeaderSelector();
+                showToast(`Switched to Role: ${role.name}`);
             }
-            showPinPrompt(null, () => {});
-        } else {
+            return;
+        }
+
+        // Check if it's a contributor
+        const contributor = state.contributors.find(c => c.id === val);
+        if (contributor) {
             state.activeRoleId = val;
             state.isAdminUnlocked = false;
             saveState();
             document.body.classList.toggle('admin-active', false);
             reRenderViews();
             updateContributorHeaderSelector();
-            showToast(`Switched to ${role.name}`);
+            showToast(`Switched to Salesperson: ${contributor.name}`);
         }
     }
     
@@ -1009,6 +1471,10 @@ function syncToFirebase() {
         const select = document.getElementById('active-role-select');
         if (!select) return;
         select.innerHTML = '<option value="">Guest User</option>';
+        
+        // Roles Optgroup
+        const roleGroup = document.createElement('optgroup');
+        roleGroup.label = "Roles";
         state.roles.forEach(role => {
             const opt = document.createElement('option');
             opt.value = role.id;
@@ -1016,8 +1482,23 @@ function syncToFirebase() {
             if (role.id === state.activeRoleId) {
                 opt.selected = true;
             }
-            select.appendChild(opt);
+            roleGroup.appendChild(opt);
         });
+        select.appendChild(roleGroup);
+
+        // Contributors Optgroup
+        const contributorGroup = document.createElement('optgroup');
+        contributorGroup.label = "Contributors";
+        state.contributors.forEach(c => {
+            const opt = document.createElement('option');
+            opt.value = c.id;
+            opt.textContent = c.name;
+            if (c.id === state.activeRoleId) {
+                opt.selected = true;
+            }
+            contributorGroup.appendChild(opt);
+        });
+        select.appendChild(contributorGroup);
     }
 
     function init() {
@@ -1077,7 +1558,11 @@ function syncToFirebase() {
         updateManualXPPrediction,
         closePasswordModal,
         verifyPassword,
-        setActiveRole
+        setActiveRole,
+        editContributor,
+        deleteContributor,
+        showProfileDetail,
+        closeProfileDetailModal
     };
 })();
 
