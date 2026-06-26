@@ -122,11 +122,12 @@
             <!-- SECTION: REPORTS -->
             <section id="view-reports" class="view-section">
                 <div class="card report-actions">
-                    <h2>Export Data (CSV)</h2>
-                    <p class="export-desc">Download your data to open in Google Sheets or Excel.</p>
-                    <div class="export-buttons">
+                    <h2>Export & Manage Data</h2>
+                    <p class="export-desc">Download your data to open in Google Sheets, or securely close the day to package today's sales and reset the dashboard stats to zero.</p>
+                    <div class="export-buttons" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
                         <button class="outline-btn" onclick="app.exportInventoryCSV()"><i class="fas fa-file-csv"></i> Export Inventory</button>
                         <button class="outline-btn" onclick="app.exportSalesCSV()"><i class="fas fa-file-csv"></i> Export Sales</button>
+                        <button class="primary-btn admin-only" onclick="app.closeDay()" style="background-color: var(--danger-color); color: white; border: none;"><i class="fas fa-calendar-check"></i> Close Day</button>
                     </div>
                 </div>
 
