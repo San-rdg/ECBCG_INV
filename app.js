@@ -22,6 +22,10 @@ const app = (function() {
         }
         db = firebase.firestore();
 
+        db.enablePersistence({synchronizeTabs:true}).catch(function(err) {
+            console.warn("Firebase persistence error:", err);
+        });
+
         db.collection('appData').doc('globalState').onSnapshot((doc) => {
             if (doc.exists) {
                 const data = doc.data();
@@ -544,6 +548,7 @@ const app = (function() {
     }
 
     function renderCart() {
+        localStorage.setItem('club_cart', JSON.stringify(state.cart));
         const container = document.getElementById('cart-items');
         container.innerHTML = '';
 
@@ -605,16 +610,14 @@ const app = (function() {
         const sale = {
             id: generateId(),
             date: new Date().toISOString(),
-            items: state.cart.map(i => ({ name: i.name, qty: i.qty, price: i.price })),
+            items: state.cart.map(i => ({ name: i.name, qty: i.qty, price: i.price, makerId: i.makerId || null })),
             total: total,
             roleId: state.activeRoleId || null // link sale to role
         };
         state.sales.unshift(sale); // Add to beginning
 
-        
-
-        saveState();
         state.cart = [];
+        saveState();
         renderCart();
         renderPOS();
         showToast("Sale completed successfully!");
@@ -651,7 +654,14 @@ const app = (function() {
             div.className = 'sales-record';
             
             const dateStr = new Date(sale.date).toLocaleString();
-            const itemsStr = sale.items.map(i => `${i.qty}x ${i.name}`).join(', ');
+            const itemsStr = sale.items.map(i => {
+                let makerName = '';
+                if (i.makerId) {
+                    const maker = state.contributors.find(c => c.id === i.makerId);
+                    if (maker) makerName = ` (Seller: ${maker.name})`;
+                }
+                return `${i.qty}x ${i.name}${makerName}`;
+            }).join('<br>');
 
             div.innerHTML = `
                 <div style="flex: 1;">
