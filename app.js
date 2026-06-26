@@ -45,6 +45,14 @@ const app = (function() {
         reRenderViews();
     });
 
+    db.collection('daily_records').orderBy('date', 'desc').onSnapshot(snapshot => {
+        state.dailyRecords = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        localStorage.setItem('club_daily_records', JSON.stringify(state.dailyRecords));
+        reRenderViews();
+    }, err => {
+        console.warn("Firebase daily_records permission error or fetch failed, using local/empty:", err);
+    });
+
     // Run one-time migration if needed
     db.collection('appData').doc('globalState').get().then(doc => {
         if (doc.exists && doc.data().migrated !== true) {
@@ -99,6 +107,7 @@ function syncToFirebase() {
         sales: [],
         cart: [],
         contributors: [],
+        dailyRecords: [],
         roles: [
             { id: 'r1', name: 'President', isPrivileged: true, password: 'pres' },
             { id: 'r2', name: 'Secretary', isPrivileged: true, password: 'sec' },
@@ -106,7 +115,7 @@ function syncToFirebase() {
             { id: 'r4', name: 'Finance', isPrivileged: false },
             { id: 'r5', name: 'Sales and Marketing', isPrivileged: false },
             { id: 'r6', name: 'HR', isPrivileged: false },
-            { id: 'r7', name: 'Assistant Production Managers', isPrivileged: false },
+            { id: 'r7', name: 'Assistant Production Manager', isPrivileged: true, password: 'aprod' },
             { id: 'r8', name: 'Treasurer', isPrivileged: false },
             { id: 'r9', name: 'Vice Secretary', isPrivileged: false },
             { id: 'r10', name: 'Vice President', isPrivileged: false }
@@ -127,10 +136,9 @@ function syncToFirebase() {
         const storedSales = localStorage.getItem('club_sales');
         const storedTheme = localStorage.getItem('club_theme');
         const storedCart = localStorage.getItem('club_cart');
-        
         const storedContributors = localStorage.getItem('club_contributors');
         const storedActiveRoleId = localStorage.getItem('club_active_role_id');
-        
+        const storedDailyRecords = localStorage.getItem('club_daily_records');
 
         if (storedInventory) {
             state.inventory = JSON.parse(storedInventory);
@@ -146,14 +154,12 @@ function syncToFirebase() {
 
         if (storedSales) state.sales = JSON.parse(storedSales);
         if (storedCart) state.cart = JSON.parse(storedCart);
+        if (storedDailyRecords) state.dailyRecords = JSON.parse(storedDailyRecords);
         if (storedTheme) {
             state.theme = storedTheme;
             document.documentElement.setAttribute('data-theme', state.theme);
         }
-        /*
-            state.adminPin = storedPin;
-        } else {
-            */
+
         state.isAdminUnlocked = false; // Always start locked
         
         if (storedContributors) {
@@ -225,12 +231,13 @@ function syncToFirebase() {
         }
 
         if (storedActiveRoleId) {
-            state.activeRoleId = storedActiveRoleId;
-            const role = state.roles.find(r => r.id === state.activeRoleId);
+            const role = state.roles.find(r => r.id === storedActiveRoleId);
             if (role && role.isPrivileged) {
                 // Do not auto-unlock admin on reload, require login again
+                state.activeRoleId = '';
                 state.isAdminUnlocked = false; 
             } else {
+                state.activeRoleId = storedActiveRoleId;
                 state.isAdminUnlocked = false;
             }
         }
@@ -243,10 +250,7 @@ function syncToFirebase() {
         localStorage.setItem('club_theme', state.theme);
         localStorage.setItem('club_contributors', JSON.stringify(state.contributors));
         localStorage.setItem('club_active_role_id', state.activeRoleId);
-        
-
-        // Also sync global state to Firebase
-        // syncToFirebase(); removed
+        localStorage.setItem('club_daily_records', JSON.stringify(state.dailyRecords));
     }
 
     // --- Utilities ---
@@ -665,55 +669,138 @@ function syncToFirebase() {
         historyContainer.innerHTML = '';
         if (state.sales.length === 0) {
             historyContainer.innerHTML = '<p style="color:var(--text-secondary); text-align:center;">No recent sales</p>';
+        } else {
+            state.sales.forEach(sale => {
+                const div = document.createElement('div');
+                div.className = 'sale-record';
+                let itemsHtml = sale.items.map(i => {
+                    const maker = state.contributors.find(c => c.id === i.makerId);
+                    const makerName = maker ? maker.name : 'Unknown Maker';
+                    return `<div>${i.qty}x ${i.name} (by ${makerName})</div>`;
+                }).join('');
+                div.innerHTML = `
+                    <div>
+                        <strong>${new Date(sale.date).toLocaleString()}</strong>
+                        <div style="color:var(--text-secondary); font-size: 0.85rem; margin-top:0.25rem;">${itemsHtml}</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <div class="price">${formatCurrency(sale.total)}</div>
+                        <button class="icon-btn admin-only" onclick="app.deleteSale('${sale.id}')" style="color:var(--danger-color); margin-top:0.5rem;"><i class="fas fa-trash"></i></button>
+                    </div>
+                `;
+                historyContainer.appendChild(div);
+            });
+        }
+
+        // Render closed daily records
+        const dailyContainer = document.getElementById('daily-records-history');
+        if (!dailyContainer) return;
+        dailyContainer.innerHTML = '';
+        if (!state.dailyRecords || state.dailyRecords.length === 0) {
+            dailyContainer.innerHTML = '<p style="color:var(--text-secondary); text-align:center;">No closed days recorded yet.</p>';
             return;
         }
-        state.sales.forEach(sale => {
+        state.dailyRecords.forEach(record => {
             const div = document.createElement('div');
             div.className = 'sale-record';
-            let itemsHtml = sale.items.map(i => {
-                const maker = state.contributors.find(c => c.id === i.makerId);
-                const makerName = maker ? maker.name : 'Unknown Maker';
-                return `<div>${i.qty}x ${i.name} (by ${makerName})</div>`;
-            }).join('');
+            
+            const dateStr = record.id;
+            const formattedDate = new Date(record.date || dateStr).toLocaleDateString(undefined, {
+                weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+            });
+            
             div.innerHTML = `
                 <div>
-                    <strong>${new Date(sale.date).toLocaleString()}</strong>
-                    <div style="color:var(--text-secondary); font-size: 0.85rem; margin-top:0.25rem;">${itemsHtml}</div>
+                    <strong>${formattedDate}</strong>
+                    <div style="color:var(--text-secondary); font-size: 0.85rem; margin-top:0.25rem;">
+                        ${record.salesCount || 0} checkouts • Total Sales: ${formatCurrency(record.totalSales || 0)}
+                    </div>
                 </div>
                 <div style="text-align: right;">
-                    <div class="price">${formatCurrency(sale.total)}</div>
-                    <button class="icon-btn admin-only" onclick="app.deleteSale('${sale.id}')" style="color:var(--danger-color); margin-top:0.5rem;"><i class="fas fa-trash"></i></button>
+                    <button class="outline-btn" onclick="app.exportDailySalesCSV('${record.id}')" style="margin: 0; padding: 0.4rem 0.8rem; font-size: 0.85rem;">
+                        <i class="fas fa-file-csv"></i> Export Day
+                    </button>
                 </div>
             `;
-            historyContainer.appendChild(div);
+            dailyContainer.appendChild(div);
         });
     }
 
     function exportInventoryCSV() {
-        let csvContent = "data:text/csv;charset=utf-8,ID,Name,Price,Stock,Category,MakerID\n";
+        if (state.inventory.length === 0) {
+            showToast("No inventory items to export.");
+            return;
+        }
+        let csvContent = "ID,Name,Price,Stock,Category,MakerName\n";
         state.inventory.forEach(i => {
-            csvContent += `${i.id},${i.name},${i.price},${i.stock},${i.category},${i.makerId}\n`;
+            const maker = state.contributors.find(c => c.id === i.makerId);
+            const makerName = maker ? maker.name : 'Unknown Maker';
+            const escapedName = i.name.replace(/"/g, '""');
+            csvContent += `${i.id},"${escapedName}",${i.price},${i.stock},"${i.category || ''}","${makerName}"\n`;
         });
-        const encodedUri = encodeURI(csvContent);
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
-        link.setAttribute("href", encodedUri);
-        link.setAttribute("download", "inventory.csv");
+        link.setAttribute("href", url);
+        link.setAttribute("download", `inventory_${new Date().toISOString().split('T')[0]}.csv`);
         document.body.appendChild(link);
         link.click();
+        document.body.removeChild(link);
+        showToast("Inventory exported.");
     }
 
     function exportSalesCSV() {
-        let csvContent = "data:text/csv;charset=utf-8,ID,Date,Total,Items\n";
+        if (state.sales.length === 0) {
+            showToast("No active sales to export.");
+            return;
+        }
+        let csvContent = "ID,Date,Total,Items,Role\n";
         state.sales.forEach(s => {
+            const role = state.roles.find(r => r.id === s.roleId);
+            const roleName = role ? role.name : 'Unknown';
             const itemsStr = s.items.map(i => `${i.qty}x ${i.name}`).join('; ');
-            csvContent += `${s.id},${s.date},${s.total},"${itemsStr}"\n`;
+            const escapedItemsStr = itemsStr.replace(/"/g, '""');
+            csvContent += `${s.id},${s.date},${s.total},"${escapedItemsStr}",${roleName}\n`;
         });
-        const encodedUri = encodeURI(csvContent);
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
-        link.setAttribute("href", encodedUri);
-        link.setAttribute("download", "sales.csv");
+        link.setAttribute("href", url);
+        link.setAttribute("download", `sales_active_${new Date().toISOString().split('T')[0]}.csv`);
         document.body.appendChild(link);
         link.click();
+        document.body.removeChild(link);
+        showToast("Active sales exported.");
+    }
+
+    function exportDailySalesCSV(dateId) {
+        const record = state.dailyRecords.find(r => r.id === dateId);
+        if (!record) {
+            showToast("Daily record not found.");
+            return;
+        }
+        const sales = record.salesRecords || [];
+        if (sales.length === 0) {
+            showToast("No sales in this daily record.");
+            return;
+        }
+        let csvContent = "ID,Date,Total,Items,Role\n";
+        sales.forEach(s => {
+            const role = state.roles.find(r => r.id === s.roleId);
+            const roleName = role ? role.name : 'Unknown';
+            const itemsStr = s.items.map(i => `${i.qty}x ${i.name}`).join('; ');
+            const escapedItemsStr = itemsStr.replace(/"/g, '""');
+            csvContent += `${s.id},${s.date},${s.total},"${escapedItemsStr}",${roleName}\n`;
+        });
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.setAttribute("href", url);
+        link.setAttribute("download", `sales_closed_${dateId}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        showToast(`Exported sales for ${dateId}`);
     }
 
     function renderLeaderboardView() {
@@ -808,22 +895,133 @@ function syncToFirebase() {
     function updateManualXPPrediction(val) {}
     
     function showPinPrompt(navTarget = null, actionCallback = null) {
-        showToast("Admin access required.");
+        pendingNavTarget = navTarget;
+        pendingAction = actionCallback;
+        const modal = document.getElementById('password-modal');
+        if (modal) {
+            document.getElementById('role-password').value = '';
+            const pwdMsg = document.getElementById('password-message');
+            if (pwdMsg) {
+                const select = document.getElementById('active-role-select');
+                const selectVal = select ? select.value : '';
+                let targetRole = null;
+                if (selectVal) {
+                    targetRole = state.roles.find(r => r.id === selectVal);
+                }
+                if (targetRole && targetRole.isPrivileged) {
+                    pwdMsg.textContent = `Enter password for ${targetRole.name}`;
+                } else {
+                    pwdMsg.textContent = "Admin access required. Enter admin password:";
+                }
+            }
+            modal.classList.add('active');
+            document.getElementById('role-password').focus();
+        }
     }
     
     function closePasswordModal() {
         document.getElementById('password-modal').classList.remove('active');
+        const select = document.getElementById('active-role-select');
+        if (select) select.value = state.activeRoleId;
+        pendingAction = null;
     }
     
     function verifyPassword(e) {
-        e.preventDefault();
+        if (e) e.preventDefault();
+        const pwdInput = document.getElementById('role-password');
+        const password = pwdInput ? pwdInput.value : '';
+        const select = document.getElementById('active-role-select');
+        const selectedRoleId = select ? select.value : '';
+        const selectedRole = state.roles.find(r => r.id === selectedRoleId);
+
+        if (selectedRole && selectedRole.isPrivileged) {
+            if (selectedRole.password === password) {
+                closePasswordModal();
+                showToast(`Logged in as ${selectedRole.name}`);
+                state.activeRoleId = selectedRoleId;
+                state.isAdminUnlocked = true;
+                saveState();
+                document.body.classList.toggle('admin-active', true);
+                reRenderViews();
+                updateContributorHeaderSelector();
+                if (pendingAction) {
+                    const callback = pendingAction;
+                    pendingAction = null;
+                    callback();
+                }
+            } else {
+                showToast(`Incorrect password for ${selectedRole.name}.`);
+                if (select) select.value = state.activeRoleId;
+            }
+        } else {
+            const matchedRole = state.roles.find(r => r.isPrivileged && r.password === password);
+            if (matchedRole) {
+                closePasswordModal();
+                showToast(`Access granted. Logged in as ${matchedRole.name}`);
+                state.activeRoleId = matchedRole.id;
+                state.isAdminUnlocked = true;
+                saveState();
+                document.body.classList.toggle('admin-active', true);
+                reRenderViews();
+                updateContributorHeaderSelector();
+                if (pendingAction) {
+                    const callback = pendingAction;
+                    pendingAction = null;
+                    callback();
+                }
+            } else {
+                showToast("Invalid password.");
+                if (select) select.value = state.activeRoleId;
+            }
+        }
     }
     
-    function setActiveRole(val) {}
+    function setActiveRole(val) {
+        if (!val) {
+            state.activeRoleId = '';
+            state.isAdminUnlocked = false;
+            saveState();
+            document.body.classList.toggle('admin-active', false);
+            reRenderViews();
+            updateContributorHeaderSelector();
+            showToast("Logged out to Guest User");
+            return;
+        }
+        const role = state.roles.find(r => r.id === val);
+        if (!role) return;
+        if (role.isPrivileged) {
+            if (state.activeRoleId === val && state.isAdminUnlocked) {
+                return;
+            }
+            showPinPrompt(null, () => {});
+        } else {
+            state.activeRoleId = val;
+            state.isAdminUnlocked = false;
+            saveState();
+            document.body.classList.toggle('admin-active', false);
+            reRenderViews();
+            updateContributorHeaderSelector();
+            showToast(`Switched to ${role.name}`);
+        }
+    }
     
-    function updateContributorHeaderSelector() {}
+    function updateContributorHeaderSelector() {
+        const select = document.getElementById('active-role-select');
+        if (!select) return;
+        select.innerHTML = '<option value="">Guest User</option>';
+        state.roles.forEach(role => {
+            const opt = document.createElement('option');
+            opt.value = role.id;
+            opt.textContent = role.name + (role.isPrivileged ? ' 🔒' : '');
+            if (role.id === state.activeRoleId) {
+                opt.selected = true;
+            }
+            select.appendChild(opt);
+        });
+    }
 
     function init() {
+        loadState();
         initFirebase();
         
         document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
@@ -849,6 +1047,7 @@ function syncToFirebase() {
         if (logForm) logForm.addEventListener('submit', handleLogContributionSubmit);
         
         document.body.classList.toggle('admin-active', state.isAdminUnlocked);
+        updateContributorHeaderSelector();
 
         navigate('dashboard');
     }
@@ -869,6 +1068,7 @@ function syncToFirebase() {
         closeDay,
         exportInventoryCSV,
         exportSalesCSV,
+        exportDailySalesCSV,
         switchLeaderboardTab,
         showContributorModal,
         closeContributorModal,
